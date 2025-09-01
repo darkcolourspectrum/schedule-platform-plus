@@ -98,7 +98,10 @@ class AuthService:
                 "first_name": user.first_name,
                 "last_name": user.last_name,
                 "role": student_role.name,
-                "studio_id": user.studio_id
+                "studio_id": user.studio_id,
+                "studio_name": None,  # У нового пользователя нет студии
+                "is_active": user.is_active,
+                "is_verified": user.is_verified
             },
             "tokens": tokens
         }

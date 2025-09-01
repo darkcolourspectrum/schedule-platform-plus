@@ -15,7 +15,7 @@ redis==5.0.1
 
 # Аутентификация и безопасность
 python-jose==3.4.0
-passlib==1.7.4
+passlib[bcrypt]==1.7.4
 bcrypt==4.3.0
 cryptography==44.0.2
 
