@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import get_async_session
 from app.services.auth_service import AuthService
 from app.services.user_service import UserService
+from app.services.studio_service import StudioService
 from app.core.security import TokenPayload
 from app.core.exceptions import (
     InvalidTokenException,
@@ -26,6 +27,11 @@ async def get_auth_service(db: AsyncSession = Depends(get_async_session)) -> Aut
 async def get_user_service(db: AsyncSession = Depends(get_async_session)) -> UserService:
     """Dependency для получения UserService"""
     return UserService(db)
+
+
+async def get_studio_service(db: AsyncSession = Depends(get_async_session)) -> StudioService:
+    """Dependency для получения StudioService"""
+    return StudioService(db)
 
 
 async def get_optional_current_user(
@@ -76,35 +82,30 @@ async def get_current_token_payload(
     return await auth_service.validate_access_token(credentials.credentials)
 
 
-def require_role(required_role: RoleType):
-    """Decorator для проверки роли пользователя"""
-    
-    def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role.name != required_role.value:
-            raise PermissionDeniedException(required_role=required_role.value)
-        return current_user
-    
-    return role_checker
+async def get_current_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Dependency для проверки роли администратора"""
+    if not current_user.is_admin:
+        raise PermissionDeniedException(required_role="admin")
+    return current_user
 
 
-def require_roles(*required_roles: RoleType):
-    """Decorator для проверки одной из ролей пользователя"""
-    
-    def roles_checker(current_user: User = Depends(get_current_user)) -> User:
-        user_role = current_user.role.name
-        allowed_roles = [role.value for role in required_roles]
-        
-        if user_role not in allowed_roles:
-            raise PermissionDeniedException(required_role=" or ".join(allowed_roles))
-        return current_user
-    
-    return roles_checker
+async def get_current_teacher(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Dependency для проверки роли преподавателя или администратора"""
+    if not (current_user.is_admin or current_user.is_teacher):
+        raise PermissionDeniedException(required_role="teacher or admin")
+    return current_user
 
 
-# Предустановленные роли
-get_current_admin = Depends(require_role(RoleType.ADMIN))
-get_current_teacher = Depends(require_roles(RoleType.ADMIN, RoleType.TEACHER))
-get_current_student = Depends(require_roles(RoleType.ADMIN, RoleType.TEACHER, RoleType.STUDENT))
+async def get_current_student(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Dependency для проверки любой авторизованной роли"""
+    # Все авторизованные пользователи могут быть студентами
+    return current_user
 
 
 def get_client_info(request: Request) -> dict:

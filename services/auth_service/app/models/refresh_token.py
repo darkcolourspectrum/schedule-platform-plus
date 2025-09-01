@@ -27,8 +27,8 @@ class RefreshToken(Base, TimestampMixin):
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     
-    # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="refresh_tokens")
+    # Relationships - используем строку для избежания циклических импортов
+    user: Mapped["User"] = relationship("User", back_populates="refresh_tokens", lazy="select")
     
     @property
     def is_expired(self) -> bool:

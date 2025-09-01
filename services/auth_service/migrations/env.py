@@ -17,10 +17,7 @@ from app.config import settings
 from app.models.base import Base
 
 # Import all models for autodiscovery
-from app.models.user import User
-from app.models.role import Role
-from app.models.studio import Studio
-from app.models.refresh_token import RefreshToken, TokenBlacklist
+from app.models import *
 
 # Alembic Config
 config = context.config

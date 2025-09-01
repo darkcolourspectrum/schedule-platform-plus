@@ -21,11 +21,11 @@ class Studio(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     
-    # Relationships
+    # Relationships - используем строку для избежания циклических импортов
     users: Mapped[List["User"]] = relationship(
         "User", 
         back_populates="studio",
-        cascade="all, delete-orphan"
+        lazy="select"
     )
     
     def __repr__(self) -> str:

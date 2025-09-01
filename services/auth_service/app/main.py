@@ -44,13 +44,15 @@ async def lifespan(app: FastAPI):
         logger.error("❌ Не удалось подключиться к базе данных!")
         raise RuntimeError("Database connection failed")
     
-    # Подключаемся к Redis
+    # Подключаемся к Redis (опционально)
     try:
         logger.info("🔄 Подключение к Redis...")
         await redis_client.connect()
         redis_connected = await redis_client.test_connection()
         
-        if not redis_connected:
+        if redis_connected:
+            logger.info("✅ Redis подключен успешно")
+        else:
             logger.warning("⚠️  Redis недоступен, но приложение продолжит работу")
     except Exception as e:
         logger.warning(f"⚠️  Redis недоступен: {e}")

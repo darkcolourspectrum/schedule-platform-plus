@@ -48,13 +48,14 @@ class User(Base, TimestampMixin):
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
     studio_id: Mapped[Optional[int]] = mapped_column(ForeignKey("studios.id"), nullable=True)
     
-    # Relationships
-    role: Mapped["Role"] = relationship("Role", back_populates="users")
-    studio: Mapped[Optional["Studio"]] = relationship("Studio", back_populates="users")
+    # Relationships - используем строки вместо классов для избежания циклических импортов
+    role: Mapped["Role"] = relationship("Role", back_populates="users", lazy="select")
+    studio: Mapped[Optional["Studio"]] = relationship("Studio", back_populates="users", lazy="select")
     refresh_tokens: Mapped[List["RefreshToken"]] = relationship(
         "RefreshToken", 
         back_populates="user",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        lazy="select"
     )
     
     @property
@@ -65,17 +66,17 @@ class User(Base, TimestampMixin):
     @property
     def is_admin(self) -> bool:
         """Проверка роли администратора"""
-        return self.role.name == "admin"
+        return self.role and self.role.name == "admin"
     
     @property
     def is_teacher(self) -> bool:
         """Проверка роли преподавателя"""
-        return self.role.name == "teacher"
+        return self.role and self.role.name == "teacher"
     
     @property
     def is_student(self) -> bool:
         """Проверка роли ученика"""
-        return self.role.name == "student"
+        return self.role and self.role.name == "student"
     
     @property
     def is_locked(self) -> bool:
@@ -85,4 +86,5 @@ class User(Base, TimestampMixin):
         return datetime.utcnow() < self.locked_until
     
     def __repr__(self) -> str:
-        return f"<User(id={self.id}, email='{self.email}', role='{self.role.name if self.role else None}')>"
+        role_name = self.role.name if self.role else None
+        return f"<User(id={self.id}, email='{self.email}', role='{role_name}')>"
