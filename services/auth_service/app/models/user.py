@@ -54,7 +54,7 @@ class User(Base, TimestampMixin):
     refresh_tokens: Mapped[List["RefreshToken"]] = relationship(
         "RefreshToken", 
         back_populates="user",
-        cascade="all, delete-orphan",
+        cascade="all, delete-orphan",  # Это должно работать для cascade delete
         lazy="select"
     )
     

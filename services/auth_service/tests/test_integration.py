@@ -64,7 +64,7 @@ class AuthServiceTester:
                 try:
                     user = await user_repo.get_by_email(user_data["email"])
                     if user:
-                        # Отзываем все токены пользователя
+                        # Отзываем все токены пользователя через API
                         try:
                             await self.client.post(
                                 "/api/v1/auth/logout-all",
@@ -73,11 +73,21 @@ class AuthServiceTester:
                         except:
                             pass
                         
-                        # Удаляем пользователя
+                        # Теперь удаляем пользователя (каскадное удаление должно работать)
                         await user_repo.delete(user.id)
                         print(f"🗑️  Удален тестовый пользователь: {user_data['email']}")
                 except Exception as e:
                     print(f"⚠️  Ошибка при очистке {user_data['email']}: {e}")
+                    # В случае ошибки, попробуем принудительно удалить токены
+                    try:
+                        from app.repositories.user_repository import RefreshTokenRepository
+                        refresh_repo = RefreshTokenRepository(db)
+                        if 'user' in locals() and user:
+                            await refresh_repo.revoke_user_tokens(user.id)
+                            await user_repo.delete(user.id)
+                            print(f"🗑️  Принудительно удален: {user_data['email']}")
+                    except Exception as cleanup_error:
+                        print(f"❌ Не удалось очистить {user_data['email']}: {cleanup_error}")
     
     async def test_health_endpoints(self):
         """Тест базовых endpoint'ов здоровья"""
@@ -261,20 +271,40 @@ class AuthServiceTester:
         
         email = TEST_USERS[0]["email"]
         if email in self.tokens:
-            headers = {"Authorization": f"Bearer {self.tokens[email]}"}
-            response = await self.client.post("/api/v1/auth/logout", headers=headers)
+            # Сначала нужно получить refresh token из login
+            login_data = {
+                "email": email,
+                "password": TEST_USERS[0]["password"]
+            }
             
-            if response.status_code == 200:
-                data = response.json()
-                assert "message" in data
-                print("✅ Выход из системы прошел успешно")
+            # Логинимся заново чтобы получить свежие токены
+            login_response = await self.client.post("/api/v1/auth/login", json=login_data)
+            if login_response.status_code == 200:
+                login_data_response = login_response.json()
+                self.tokens[email] = login_data_response["tokens"]["access_token"]
                 
-                # Проверяем, что токен стал недействительным
-                response = await self.client.get("/api/v1/auth/me", headers=headers)
-                assert response.status_code == 401
-                print("✅ Токен корректно аннулирован")
+                # Проверяем cookies для refresh token
+                cookies = login_response.cookies
+                
+                headers = {"Authorization": f"Bearer {self.tokens[email]}"}
+                
+                # Пытаемся выйти
+                response = await self.client.post("/api/v1/auth/logout", headers=headers, cookies=cookies)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    assert "message" in data
+                    print("✅ Выход из системы прошел успешно")
+                    
+                    # Проверяем, что токен стал недействительным
+                    response = await self.client.get("/api/v1/auth/me", headers=headers)
+                    assert response.status_code == 401
+                    print("✅ Токен корректно аннулирован")
+                else:
+                    print(f"⚠️  Ошибка выхода: {response.status_code}")
+                    print(f"    Response: {response.text}")
             else:
-                print(f"⚠️  Ошибка выхода: {response.status_code}")
+                print(f"⚠️  Не удалось залогиниться для теста logout: {login_response.status_code}")
     
     async def run_all_tests(self):
         """Запуск всех тестов"""
