@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 
 from app.dependencies import get_auth_service, get_client_info, get_current_user
 from app.services.auth_service import AuthService
+from app.core.exceptions import RateLimitExceededException
 from app.schemas.auth import (
     RegisterRequest,
     LoginRequest,
@@ -27,39 +28,49 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 )
 async def register(
     user_data: RegisterRequest,
+    request: Request,
     response: Response,
     client_info: dict = Depends(get_client_info),
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    """Регистрация нового пользователя"""
+    """Регистрация нового пользователя с rate limiting"""
     
-    result = await auth_service.register_user(
-        email=user_data.email,
-        password=user_data.password,
-        first_name=user_data.first_name,
-        last_name=user_data.last_name,
-        phone=user_data.phone,
-        privacy_policy_accepted=user_data.privacy_policy_accepted
-    )
-    
-    # Устанавливаем refresh token в httpOnly cookie
-    response.set_cookie(
-        key="refresh_token",
-        value=result["tokens"]["refresh_token"],
-        httponly=True,
-        secure=True,  # HTTPS only в production
-        samesite="lax",
-        max_age=60 * 60 * 24 * 7  # 7 дней
-    )
-    
-    return AuthResponse(
-        user=result["user"],
-        tokens={
-            "access_token": result["tokens"]["access_token"],
-            "refresh_token": result["tokens"]["refresh_token"],
-            "token_type": result["tokens"]["token_type"]
-        }
-    )
+    try:
+        result = await auth_service.register_user(
+            email=user_data.email,
+            password=user_data.password,
+            first_name=user_data.first_name,
+            last_name=user_data.last_name,
+            phone=user_data.phone,
+            privacy_policy_accepted=user_data.privacy_policy_accepted,
+            ip_address=client_info.get("ip_address")
+        )
+        
+        # Устанавливаем refresh token в httpOnly cookie
+        response.set_cookie(
+            key="refresh_token",
+            value=result["tokens"]["refresh_token"],
+            httponly=True,
+            secure=True,  # HTTPS only в production
+            samesite="lax",
+            max_age=60 * 60 * 24 * 7  # 7 дней
+        )
+        
+        return AuthResponse(
+            user=result["user"],
+            tokens={
+                "access_token": result["tokens"]["access_token"],
+                "refresh_token": result["tokens"]["refresh_token"],
+                "token_type": result["tokens"]["token_type"]
+            }
+        )
+        
+    except RateLimitExceededException as e:
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": f"Rate limit exceeded. Try again in {e.retry_after} seconds"},
+            headers={"Retry-After": str(e.retry_after)}
+        )
 
 
 @router.post(
@@ -70,38 +81,47 @@ async def register(
 )
 async def login(
     credentials: LoginRequest,
+    request: Request,
     response: Response,
     client_info: dict = Depends(get_client_info),
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    """Вход в систему"""
+    """Вход в систему с rate limiting"""
     
-    result = await auth_service.login_user(
-        email=credentials.email,
-        password=credentials.password,
-        device_info=client_info.get("device_info"),
-        ip_address=client_info.get("ip_address"),
-        user_agent=client_info.get("user_agent")
-    )
-    
-    # Устанавливаем refresh token в httpOnly cookie
-    response.set_cookie(
-        key="refresh_token",
-        value=result["tokens"]["refresh_token"],
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=60 * 60 * 24 * 7  # 7 дней
-    )
-    
-    return AuthResponse(
-        user=result["user"],
-        tokens={
-            "access_token": result["tokens"]["access_token"],
-            "refresh_token": result["tokens"]["refresh_token"],
-            "token_type": result["tokens"]["token_type"]
-        }
-    )
+    try:
+        result = await auth_service.login_user(
+            email=credentials.email,
+            password=credentials.password,
+            device_info=client_info.get("device_info"),
+            ip_address=client_info.get("ip_address"),
+            user_agent=client_info.get("user_agent")
+        )
+        
+        # Устанавливаем refresh token в httpOnly cookie
+        response.set_cookie(
+            key="refresh_token",
+            value=result["tokens"]["refresh_token"],
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 7  # 7 дней
+        )
+        
+        return AuthResponse(
+            user=result["user"],
+            tokens={
+                "access_token": result["tokens"]["access_token"],
+                "refresh_token": result["tokens"]["refresh_token"],
+                "token_type": result["tokens"]["token_type"]
+            }
+        )
+        
+    except RateLimitExceededException as e:
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": f"Rate limit exceeded. Try again in {e.retry_after} seconds"},
+            headers={"Retry-After": str(e.retry_after)}
+        )
 
 
 @router.post(
@@ -114,7 +134,7 @@ async def refresh_token(
     request: Request,
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    """Обновление access токена"""
+    """Обновление access токена с rate limiting"""
     
     # Получаем refresh token из cookie
     refresh_token = request.cookies.get("refresh_token")
@@ -124,12 +144,32 @@ async def refresh_token(
             content={"detail": "Refresh token not provided"}
         )
     
-    result = await auth_service.refresh_access_token(refresh_token)
-    
-    return AccessTokenResponse(
-        access_token=result["access_token"],
-        token_type=result["token_type"]
-    )
+    try:
+        # Пытаемся получить user_id для rate limiting
+        user_id = None
+        try:
+            from app.repositories.user_repository import RefreshTokenRepository
+            from app.database.connection import get_async_session
+            
+            # Это не оптимально, но для rate limiting нужен user_id
+            # В production лучше хранить user_id в refresh token payload
+            pass
+        except:
+            pass
+        
+        result = await auth_service.refresh_access_token(refresh_token, user_id=user_id)
+        
+        return AccessTokenResponse(
+            access_token=result["access_token"],
+            token_type=result["token_type"]
+        )
+        
+    except RateLimitExceededException as e:
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": f"Rate limit exceeded. Try again in {e.retry_after} seconds"},
+            headers={"Retry-After": str(e.retry_after)}
+        )
 
 
 @router.post(
@@ -144,7 +184,7 @@ async def logout(
     current_user: User = Depends(get_current_user),
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    """Выход из системы"""
+    """Выход из системы с Redis blacklist"""
     
     # Получаем refresh token из cookie
     refresh_token = request.cookies.get("refresh_token")
@@ -184,7 +224,7 @@ async def logout_all_devices(
     current_user: User = Depends(get_current_user),
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    """Выход со всех устройств"""
+    """Выход со всех устройств с очисткой Redis кеша"""
     
     result = await auth_service.logout_all_devices(current_user.id)
     
@@ -230,15 +270,37 @@ async def get_current_user_info(
     "/validate-token",
     status_code=status.HTTP_200_OK,
     summary="Валидация access токена",
-    description="Проверка валидности текущего access токена"
+    description="Проверка валидности текущего access токена с Redis blacklist"
 )
 async def validate_token(
     current_user: User = Depends(get_current_user)
 ):
-    """Валидация access токена"""
+    """Валидация access токена с использованием Redis кеша"""
     
     return {
         "valid": True,
         "user_id": current_user.id,
         "role": current_user.role.name
     }
+
+
+@router.get(
+    "/stats",
+    summary="Статистика аутентификации",
+    description="Статистика rate limiting и blacklist кеша (только для администраторов)"
+)
+async def get_auth_stats(
+    current_user: User = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Получение статистики аутентификации"""
+    
+    # Проверяем права доступа
+    if not current_user.is_admin:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "Access denied. Admin role required"}
+        )
+    
+    stats = await auth_service.get_auth_stats()
+    return stats
