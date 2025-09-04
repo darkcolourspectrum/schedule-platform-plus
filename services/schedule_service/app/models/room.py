@@ -52,26 +52,35 @@ class Room(Base, TimestampMixin):
     # Отношения
     studio: Mapped["Studio"] = relationship("Studio", back_populates="rooms")
     time_slots: Mapped[List["TimeSlot"]] = relationship(
-        "TimeSlot",
+        "TimeSlot", 
         back_populates="room"
     )
     
     def __repr__(self) -> str:
-        return f"<Room(id={self.id}, name='{self.name}', studio='{self.studio.name if self.studio else 'None'}')>"
+        return f"<Room(id={self.id}, name='{self.name}', type='{self.room_type}', studio_id={self.studio_id})>"
     
     @property
-    def full_name(self) -> str:
-        """Полное название с указанием студии"""
-        return f"{self.studio.name} - {self.name}" if self.studio else self.name
-    
-    @property
-    def equipment_summary(self) -> str:
-        """Краткое описание оборудования"""
+    def equipment_list(self) -> List[str]:
+        """Список доступного оборудования"""
         equipment = []
         if self.has_piano:
-            equipment.append("фортепиано")
+            equipment.append("Пианино")
         if self.has_microphone:
-            equipment.append("микрофон")
+            equipment.append("Микрофон")
+        if self.has_mirror:
+            equipment.append("Зеркало")
+        if self.has_sound_system:
+            equipment.append("Звуковая система")
         if self.has_recording_equipment:
-            equipment.append("запись")
-        return ", ".join(equipment) if equipment else "базовое оборудование"
+            equipment.append("Оборудование для записи")
+        return equipment
+    
+    @property
+    def is_suitable_for_recording(self) -> bool:
+        """Подходит ли кабинет для записи"""
+        return self.room_type == RoomType.RECORDING or self.has_recording_equipment
+    
+    @property
+    def is_suitable_for_groups(self) -> bool:
+        """Подходит ли для групповых занятий"""
+        return self.room_type in [RoomType.VOCAL_LARGE, RoomType.THEORY] and self.max_capacity >= 3

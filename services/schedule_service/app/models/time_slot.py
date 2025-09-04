@@ -1,7 +1,8 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Date, Time, ForeignKey, Integer, Boolean, String
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime, date, time
+from datetime import datetime
+from datetime import date as date_type, time as time_type  # Избегаем конфликта имен
 from enum import Enum
 
 from app.models.base import Base, TimestampMixin
@@ -34,9 +35,9 @@ class TimeSlot(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     
     # Время и дата
-    date: Mapped[date] = mapped_column(Date, nullable=False)
-    start_time: Mapped[time] = mapped_column(Time, nullable=False)
-    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    date: Mapped[date_type] = mapped_column(Date, nullable=False)
+    start_time: Mapped[time_type] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time_type] = mapped_column(Time, nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     
     # Статус слота
@@ -88,103 +89,65 @@ class TimeSlot(Base, TimestampMixin):
     
     @property
     def is_booked(self) -> bool:
-        """Полностью забронирован ли слот (с уроком)"""
-        return self.status == SlotStatus.BOOKED and self.lesson is not None
+        """Забронирован ли слот с уроком"""
+        return self.status == SlotStatus.BOOKED
     
     @property
     def is_past(self) -> bool:
-        """Прошел ли временной слот"""
-        return self.datetime_end < datetime.now()
+        """Прошел ли слот по времени"""
+        return datetime.now() > self.datetime_start
     
     @property
-    def time_range_str(self) -> str:
-        """Временной диапазон в строке HH:MM-HH:MM"""
-        return f"{self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')}"
-    
-    @property
-    def can_be_reserved_by_teacher(self, teacher_id: int) -> bool:
-        """Может ли преподаватель забронировать этот слот"""
-        return self.is_available
-    
-    @property
-    def can_be_cancelled_by_teacher(self, teacher_id: int) -> bool:
-        """Может ли преподаватель отменить бронирование"""
-        if self.reserved_by_teacher_id != teacher_id:
+    def can_be_cancelled(self) -> bool:
+        """Можно ли отменить бронирование"""
+        if self.is_past:
             return False
-        
-        if self.status == SlotStatus.COMPLETED:
-            return False
-        
-        # Можно отменить минимум за 2 часа до начала
-        hours_until_slot = (self.datetime_start - datetime.now()).total_seconds() / 3600
-        return hours_until_slot >= 2
+        # Можно отменить за 2 часа до урока
+        return (self.datetime_start - datetime.now()).total_seconds() > 7200  # 2 часа = 7200 секунд
     
-    def reserve_for_teacher(self, teacher_id: int, teacher_name: str, teacher_email: str) -> bool:
-        """
-        Бронирование слота преподавателем
-        
-        Returns:
-            bool: True если успешно забронировано
-        """
+    def reserve_for_teacher(self, teacher_id: int, teacher_name: str, teacher_email: str) -> None:
+        """Бронирование слота для преподавателя"""
         if not self.is_available:
-            return False
+            raise ValueError(f"Slot is not available (status: {self.status})")
         
         self.status = SlotStatus.RESERVED
         self.reserved_by_teacher_id = teacher_id
         self.reserved_by_teacher_name = teacher_name
         self.reserved_by_teacher_email = teacher_email
-        return True
     
-    def release_reservation(self, teacher_id: int) -> bool:
-        """
-        Снятие брони со слота преподавателем
-        
-        Args:
-            teacher_id: ID преподавателя, который пытается снять бронь
-            
-        Returns:
-            bool: True если бронь снята
-        """
-        if not self.can_be_cancelled_by_teacher(teacher_id):
-            return False
+    def release_from_teacher(self) -> None:
+        """Освобождение слота от преподавателя"""
+        if self.status not in [SlotStatus.RESERVED, SlotStatus.BOOKED]:
+            raise ValueError(f"Cannot release slot with status: {self.status}")
         
         self.status = SlotStatus.AVAILABLE
         self.reserved_by_teacher_id = None
         self.reserved_by_teacher_name = None
         self.reserved_by_teacher_email = None
-        return True
     
-    def mark_as_booked(self) -> bool:
-        """
-        Отметить слот как полностью забронированный (с уроком)
+    def book_with_lesson(self) -> None:
+        """Подтверждение бронирования с назначенным уроком"""
+        if self.status != SlotStatus.RESERVED:
+            raise ValueError(f"Cannot book slot with status: {self.status}")
         
-        Returns:
-            bool: True если статус изменен
-        """
-        if self.status == SlotStatus.RESERVED:
-            self.status = SlotStatus.BOOKED
-            return True
-        return False
+        self.status = SlotStatus.BOOKED
     
-    def complete_lesson(self) -> bool:
-        """
-        Завершить урок в этом слоте
+    def complete_lesson(self) -> None:
+        """Завершение урока"""
+        if self.status != SlotStatus.BOOKED:
+            raise ValueError(f"Cannot complete lesson for slot with status: {self.status}")
         
-        Returns:
-            bool: True если урок завершен
-        """
-        if self.status == SlotStatus.BOOKED:
-            self.status = SlotStatus.COMPLETED
-            return True
-        return False
+        self.status = SlotStatus.COMPLETED
     
-    def block_by_admin(self, reason: str) -> None:
+    def block_slot(self, admin_notes: Optional[str] = None) -> None:
         """Блокировка слота администратором"""
         self.status = SlotStatus.BLOCKED
-        self.admin_notes = reason
+        self.admin_notes = admin_notes
     
-    def unblock_by_admin(self) -> None:
-        """Разблокировка слота администратором"""
-        if self.status == SlotStatus.BLOCKED:
-            self.status = SlotStatus.AVAILABLE
-            self.admin_notes = None
+    def unblock_slot(self) -> None:
+        """Разблокировка слота"""
+        if self.status != SlotStatus.BLOCKED:
+            raise ValueError(f"Cannot unblock slot with status: {self.status}")
+        
+        self.status = SlotStatus.AVAILABLE
+        self.admin_notes = None

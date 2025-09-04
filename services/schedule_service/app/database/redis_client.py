@@ -1,7 +1,7 @@
 import redis.asyncio as redis
 from redis.asyncio import Redis
 import logging
-from typing import Optional, Union
+from typing import Optional, Union, List, Any
 import json
 from app.config import settings
 
@@ -54,10 +54,21 @@ class RedisClient:
             logger.error(f"Ошибка получения из Redis key={key}: {e}")
             return None
     
+    async def get_json(self, key: str) -> Optional[Any]:
+        """Получение JSON значения по ключу"""
+        try:
+            value = await self.get(key)
+            if value:
+                return json.loads(value)
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка получения JSON из Redis key={key}: {e}")
+            return None
+    
     async def set(
         self,
         key: str,
-        value: Union[str, dict, list],
+        value: Union[str, dict, list, int, float],
         expire: Optional[int] = None
     ) -> bool:
         """
@@ -65,7 +76,7 @@ class RedisClient:
         
         Args:
             key: Ключ
-            value: Значение (строка, dict или list)
+            value: Значение (строка, dict, list, число)
             expire: TTL в секундах
         """
         try:
@@ -74,34 +85,31 @@ class RedisClient:
             
             # Сериализуем сложные типы в JSON
             if isinstance(value, (dict, list)):
-                value = json.dumps(value, ensure_ascii=False, default=str)
+                value = json.dumps(value, ensure_ascii=False)
+            elif isinstance(value, (int, float)):
+                value = str(value)
             
+            # Устанавливаем значение с TTL
             if expire:
-                return await self._redis.setex(key, expire, value)
+                await self._redis.setex(key, expire, value)
             else:
-                return await self._redis.set(key, value)
-                
+                await self._redis.set(key, value)
+            
+            return True
+            
         except Exception as e:
-            logger.error(f"Ошибка сохранения в Redis key={key}: {e}")
+            logger.error(f"Ошибка записи в Redis key={key}: {e}")
             return False
-    
-    async def get_json(self, key: str) -> Optional[Union[dict, list]]:
-        """Получение и десериализация JSON значения"""
-        try:
-            value = await self.get(key)
-            if value:
-                return json.loads(value)
-            return None
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Ошибка десериализации JSON key={key}: {e}")
-            return None
     
     async def delete(self, key: str) -> bool:
         """Удаление ключа"""
         try:
             if not self._redis:
                 await self.connect()
-            return bool(await self._redis.delete(key))
+            
+            result = await self._redis.delete(key)
+            return result > 0
+            
         except Exception as e:
             logger.error(f"Ошибка удаления из Redis key={key}: {e}")
             return False
@@ -111,33 +119,79 @@ class RedisClient:
         try:
             if not self._redis:
                 await self.connect()
-            return bool(await self._redis.exists(key))
+            
+            return await self._redis.exists(key) > 0
+            
         except Exception as e:
             logger.error(f"Ошибка проверки существования key={key}: {e}")
             return False
+    
+    async def get_keys_pattern(self, pattern: str) -> List[str]:
+        """Получение списка ключей по шаблону"""
+        try:
+            if not self._redis:
+                await self.connect()
+            
+            return await self._redis.keys(pattern)
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения ключей по шаблону {pattern}: {e}")
+            return []
     
     async def expire(self, key: str, seconds: int) -> bool:
         """Установка TTL для существующего ключа"""
         try:
             if not self._redis:
                 await self.connect()
-            return bool(await self._redis.expire(key, seconds))
+            
+            return await self._redis.expire(key, seconds)
+            
         except Exception as e:
-            logger.error(f"Ошибка установки TTL key={key}: {e}")
+            logger.error(f"Ошибка установки TTL для key={key}: {e}")
             return False
     
-    async def get_keys_pattern(self, pattern: str) -> list:
-        """Получение ключей по паттерну"""
+    async def ttl(self, key: str) -> int:
+        """Получение TTL ключа"""
         try:
             if not self._redis:
                 await self.connect()
-            return await self._redis.keys(pattern)
+            
+            return await self._redis.ttl(key)
+            
         except Exception as e:
-            logger.error(f"Ошибка получения ключей по паттерну {pattern}: {e}")
-            return []
+            logger.error(f"Ошибка получения TTL для key={key}: {e}")
+            return -1
+    
+    async def incr(self, key: str, amount: int = 1) -> Optional[int]:
+        """Увеличение числового значения"""
+        try:
+            if not self._redis:
+                await self.connect()
+            
+            return await self._redis.incrby(key, amount)
+            
+        except Exception as e:
+            logger.error(f"Ошибка инкремента key={key}: {e}")
+            return None
+    
+    async def clear_pattern(self, pattern: str) -> int:
+        """Удаление всех ключей по шаблону"""
+        try:
+            keys = await self.get_keys_pattern(pattern)
+            if keys:
+                deleted = 0
+                for key in keys:
+                    if await self.delete(key):
+                        deleted += 1
+                return deleted
+            return 0
+            
+        except Exception as e:
+            logger.error(f"Ошибка очистки по шаблону {pattern}: {e}")
+            return 0
     
     async def flush_db(self) -> bool:
-        """Очистка текущей базы данных (только для development!)"""
+        """Очистка текущей базы данных Redis"""
         try:
             if not self._redis:
                 await self.connect()

@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     @property
     def database_url_sync(self) -> str:
         """Синхронный URL для Alembic"""
-        return self.database_url.replace("postgresql://", "postgresql://")
+        return self.database_url.replace("postgresql+psycopg://", "postgresql://")
     
     @property
     def database_url_async(self) -> str:

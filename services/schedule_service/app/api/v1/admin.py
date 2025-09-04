@@ -14,8 +14,8 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 class StudioScheduleSettingsUpdate(BaseModel):
     """Обновление настроек расписания студии"""
-    working_hours_start: Optional[str] = Field(None, regex=r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
-    working_hours_end: Optional[str] = Field(None, regex=r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
+    working_hours_start: Optional[str] = Field(None, pattern=r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
+    working_hours_end: Optional[str] = Field(None, pattern=r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
     slot_duration_minutes: Optional[int] = Field(None, ge=15, le=180)
 
 
@@ -198,7 +198,7 @@ async def unblock_time_slot(
             detail="Time slot not found"
         )
     
-    slot.unblock_by_admin()
+    slot.unblock_slot()
     await schedule_service.db.commit()
     
     return {
@@ -206,7 +206,7 @@ async def unblock_time_slot(
         "slot": {
             "id": slot.id,
             "date": slot.date.isoformat(),
-            "time_range": slot.time_range_str,
+            "time_range": f"{slot.start_time.strftime('%H:%M')}-{slot.end_time.strftime('%H:%M')}",
             "status": slot.status.value
         }
     }
@@ -227,7 +227,10 @@ async def get_studio_rooms(
 ):
     """Получение кабинетов студии"""
     
-    rooms = await schedule_service.room_repo.get_studio_rooms(
+    from app.repositories.room_repository import RoomRepository
+    room_repo = RoomRepository(schedule_service.db)
+    
+    rooms = await room_repo.get_studio_rooms(
         studio_id=studio_id,
         active_only=not include_inactive
     )
@@ -244,7 +247,7 @@ async def get_studio_rooms(
                 "max_capacity": room.max_capacity,
                 "area_sqm": room.area_sqm,
                 "floor_number": room.floor_number,
-                "equipment": room.equipment_summary,
+                "equipment": room.equipment_list,
                 "is_active": room.is_active,
                 "equipment_details": {
                     "has_piano": room.has_piano,
@@ -262,7 +265,8 @@ async def get_studio_rooms(
 @router.post(
     "/rooms",
     summary="Создание нового кабинета",
-    description="Добавление кабинета в студию"
+    description="Добавление кабинета в студию",
+    status_code=status.HTTP_201_CREATED
 )
 async def create_room(
     request: RoomCreateRequest,
@@ -271,7 +275,10 @@ async def create_room(
 ):
     """Создание нового кабинета"""
     
-    room = await schedule_service.room_repo.create_room(
+    from app.repositories.room_repository import RoomRepository
+    room_repo = RoomRepository(schedule_service.db)
+    
+    room = await room_repo.create_room(
         studio_id=request.studio_id,
         name=request.name,
         room_type=request.room_type,
@@ -294,44 +301,91 @@ async def create_room(
             "type": room.room_type.value,
             "studio_id": room.studio_id,
             "max_capacity": room.max_capacity,
-            "equipment": room.equipment_summary
+            "equipment": room.equipment_list
         }
     }
 
 
 @router.put(
-    "/rooms/{room_id}/toggle-active",
-    summary="Активация/деактивация кабинета",
-    description="Включение или отключение кабинета"
+    "/rooms/{room_id}/status",
+    summary="Изменение статуса кабинета",
+    description="Активация/деактивация кабинета"
 )
-async def toggle_room_active(
+async def update_room_status(
     room_id: int = Path(..., description="ID кабинета"),
+    is_active: bool = Query(..., description="Новый статус активности"),
     current_user: CurrentUser = Depends(get_current_admin),
     schedule_service: ScheduleService = Depends(get_schedule_service)
 ):
-    """Переключение активности кабинета"""
+    """Изменение статуса активности кабинета"""
     
-    room = await schedule_service.room_repo.get_by_id(room_id)
-    if not room:
+    from app.repositories.room_repository import RoomRepository
+    room_repo = RoomRepository(schedule_service.db)
+    
+    updated_room = await room_repo.update_room_status(room_id, is_active)
+    
+    if not updated_room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Room not found"
         )
     
-    new_status = not room.is_active
-    updated_room = await schedule_service.room_repo.update(room_id, is_active=new_status)
+    status_text = "activated" if is_active else "deactivated"
     
     return {
-        "message": f"Room {'activated' if new_status else 'deactivated'} successfully",
-        "room": {
-            "id": updated_room.id,
-            "name": updated_room.name,
-            "is_active": updated_room.is_active
-        }
+        "message": f"Room {status_text} successfully",
+        "room_id": room_id,
+        "is_active": is_active
     }
 
 
-# === Аналитика и статистика ===
+# === Статистика и аналитика ===
+
+@router.get(
+    "/statistics/lessons",
+    summary="Статистика уроков",
+    description="Аналитика по урокам за период"
+)
+async def get_lesson_statistics(
+    start_date: date = Query(..., description="Начало периода"),
+    end_date: date = Query(..., description="Конец периода"),
+    studio_id: Optional[int] = Query(None, description="ID студии (все студии если не указано)"),
+    current_user: CurrentUser = Depends(get_current_admin),
+    schedule_service: ScheduleService = Depends(get_schedule_service)
+):
+    """Получение статистики по урокам"""
+    
+    statistics = await schedule_service.get_lesson_statistics(
+        start_date=start_date,
+        end_date=end_date,
+        studio_id=studio_id
+    )
+    
+    return statistics
+
+
+@router.get(
+    "/statistics/utilization",
+    summary="Статистика использования кабинетов",
+    description="Процент загруженности кабинетов за период"
+)
+async def get_room_utilization(
+    start_date: date = Query(..., description="Начало периода"),
+    end_date: date = Query(..., description="Конец периода"),
+    studio_id: Optional[int] = Query(None, description="ID студии"),
+    current_user: CurrentUser = Depends(get_current_admin),
+    schedule_service: ScheduleService = Depends(get_schedule_service)
+):
+    """Получение статистики использования кабинетов"""
+    
+    utilization = await schedule_service.get_room_utilization_statistics(
+        start_date=start_date,
+        end_date=end_date,
+        studio_id=studio_id
+    )
+    
+    return utilization
+
 
 @router.get(
     "/analytics/lessons",
@@ -348,7 +402,10 @@ async def get_lesson_analytics(
 ):
     """Получение статистики по урокам"""
     
-    stats = await schedule_service.lesson_repo.get_lesson_statistics(
+    from app.repositories.lesson_repository import LessonRepository
+    lesson_repo = LessonRepository(schedule_service.db)
+    
+    stats = await lesson_repo.get_lesson_statistics(
         teacher_id=teacher_id,
         studio_id=studio_id,
         start_date=start_date,
@@ -389,8 +446,11 @@ async def get_studio_utilization(
             detail="Analysis period cannot exceed 1 month"
         )
     
+    from app.repositories.time_slot_repository import TimeSlotRepository
+    time_slot_repo = TimeSlotRepository(schedule_service.db)
+    
     # Получаем все слоты за период
-    all_slots = await schedule_service.time_slot_repo.get_studio_schedule_range(
+    all_slots = await time_slot_repo.get_studio_schedule_range(
         studio_id=studio_id,
         start_date=start_date,
         end_date=end_date
@@ -467,7 +527,10 @@ async def emergency_cancel_lesson(
 ):
     """Экстренная отмена урока администратором"""
     
-    success = await schedule_service.lesson_repo.cancel_lesson(
+    from app.repositories.lesson_repository import LessonRepository
+    lesson_repo = LessonRepository(schedule_service.db)
+    
+    success = await lesson_repo.cancel_lesson(
         lesson_id=lesson_id,
         reason=f"Emergency cancellation by admin: {reason}",
         by_teacher=False,
