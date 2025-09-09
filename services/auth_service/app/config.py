@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     # Security
     password_min_length: int = Field(8, env="PASSWORD_MIN_LENGTH")
     bcrypt_rounds: int = Field(12, env="BCRYPT_ROUNDS")
+    internal_api_key: str = Field(..., env="INTERNAL_API_KEY")
+
     
     # Rate Limiting
     rate_limit_per_minute: int = Field(60, env="RATE_LIMIT_PER_MINUTE")

@@ -1,166 +1,157 @@
 """
-Database connection configuration for Profile Service
-Настройка подключения к PostgreSQL с использованием SQLAlchemy 2.0
+Подключение к PostgreSQL базе данных для Profile Service
 """
 
+import asyncio
 import logging
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import declarative_base
-from sqlalchemy import event, text
+from typing import AsyncGenerator, Optional
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
+import sys
+
+# Windows compatibility
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# SQLAlchemy engine для асинхронных операций
+# Создание асинхронного движка
 engine = create_async_engine(
     settings.database_url_async,
-    echo=settings.debug,  # Логирование SQL запросов в debug режиме
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,  # Проверка соединения перед использованием
-    pool_recycle=3600,   # Переподключение каждый час
+    echo=settings.debug,  # Логирование SQL запросов в dev режиме
+    pool_pre_ping=True,   # Проверка соединений
+    pool_recycle=3600,    # Переподключение каждый час
+    max_overflow=10,      # Дополнительные соединения
+    pool_size=20          # Размер пула соединений
 )
 
-# Session maker для создания сессий
+# Создание фабрики сессий
 AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
+    engine,
     class_=AsyncSession,
     expire_on_commit=False,
-    autocommit=False,
-    autoflush=False
+    autoflush=True,
+    autocommit=False
 )
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_database_session() -> AsyncGenerator[AsyncSession, None]:
     """
-    Dependency для получения сессии базы данных
-    Используется в FastAPI endpoints через Depends()
+    Получение сессии базы данных для dependency injection
+    
+    Yields:
+        AsyncSession: Сессия SQLAlchemy
     """
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
-        except Exception:
+        except SQLAlchemyError as e:
+            logger.error(f"Database session error: {e}")
             await session.rollback()
             raise
         finally:
             await session.close()
 
 
-async def init_database():
+async def test_database_connection() -> bool:
     """
-    Инициализация базы данных
-    Создает все таблицы если их нет
-    """
-    try:
-        # Импортируем все модели для создания таблиц
-        from app.models import Base
-        
-        async with engine.begin() as conn:
-            # Создаем все таблицы
-            await conn.run_sync(Base.metadata.create_all)
-            logger.info("Database tables created successfully")
-            
-    except Exception as e:
-        logger.error(f"Error initializing database: {e}")
-        raise
-
-
-async def check_database_connection() -> bool:
-    """
-    Проверка соединения с базой данных
-    Возвращает True если соединение успешно
+    Тестирование подключения к базе данных
+    
+    Returns:
+        bool: True если подключение успешно
     """
     try:
         async with engine.begin() as conn:
             # Простой запрос для проверки соединения
-            result = await conn.execute(text("SELECT 1"))
-            result.fetchone()
+            result = await conn.execute(text("SELECT 1 as test"))
+            test_value = result.scalar()
             
-        logger.info("Database connection check: SUCCESS")
-        return True
-        
+            if test_value == 1:
+                logger.info("✅ Подключение к PostgreSQL установлено успешно")
+                
+                # Проверяем, какая база данных подключена
+                db_result = await conn.execute(text("SELECT current_database()"))
+                db_name = db_result.scalar()
+                logger.info(f"📊 Подключена база данных: {db_name}")
+                
+                return True
+            else:
+                logger.error("❌ Тест подключения к базе данных провален")
+                return False
+                
     except Exception as e:
-        logger.error(f"Database connection check failed: {e}")
+        logger.error(f"❌ Ошибка подключения к базе данных: {e}")
+        logger.error(f"URL подключения: {settings.database_url_async}")
         return False
 
 
-async def close_database():
-    """Закрытие соединения с базой данных"""
+async def close_database_connections():
+    """
+    Закрытие всех соединений с базой данных
+    """
     try:
         await engine.dispose()
-        logger.info("Database connection closed")
+        logger.info("🔐 Соединения с базой данных закрыты")
     except Exception as e:
-        logger.error(f"Error closing database connection: {e}")
+        logger.error(f"Ошибка при закрытии соединений: {e}")
 
 
-# Event listeners для логирования
-@event.listens_for(engine.sync_engine, "connect")
-def on_connect(dbapi_connection, connection_record):
-    """Обработчик подключения к БД"""
-    if settings.debug:
-        logger.debug("Database connection established")
-
-
-@event.listens_for(engine.sync_engine, "checkout")
-def on_checkout(dbapi_connection, connection_record, connection_proxy):
-    """Обработчик взятия соединения из пула"""
-    if settings.debug:
-        logger.debug("Database connection checked out from pool")
-
-
-@event.listens_for(engine.sync_engine, "checkin")
-def on_checkin(dbapi_connection, connection_record):
-    """Обработчик возврата соединения в пул"""
-    if settings.debug:
-        logger.debug("Database connection returned to pool")
-
-
-# Вспомогательные функции для тестирования
-async def reset_database():
+async def create_tables():
     """
-    Сброс базы данных (только для тестов!)
-    ОСТОРОЖНО: Удаляет все данные!
+    Создание всех таблиц в базе данных
+    ВНИМАНИЕ: Используется только для разработки!
+    В продакшене используйте Alembic миграции.
     """
-    if not settings.is_development:
-        raise RuntimeError("Database reset is only allowed in development environment")
-    
     try:
-        from app.models import Base
+        from app.models.base import Base
         
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
+            # Создаем все таблицы
             await conn.run_sync(Base.metadata.create_all)
-            logger.warning("Database has been reset (all data lost)")
+            logger.info("✅ Все таблицы созданы успешно")
             
     except Exception as e:
-        logger.error(f"Error resetting database: {e}")
+        logger.error(f"❌ Ошибка создания таблиц: {e}")
         raise
 
 
+async def drop_tables():
+    """
+    Удаление всех таблиц из базы данных
+    ВНИМАНИЕ: Опасная операция! Используется только для разработки!
+    """
+    try:
+        from app.models.base import Base
+        
+        async with engine.begin() as conn:
+            # Удаляем все таблицы
+            await conn.run_sync(Base.metadata.drop_all)
+            logger.warning("⚠️ Все таблицы удалены")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления таблиц: {e}")
+        raise
+
+
+# Алиас для совместимости
+get_db = get_database_session
+
+
+# Для тестирования подключения из командной строки
 if __name__ == "__main__":
-    """Скрипт для проверки подключения к БД"""
-    import asyncio
-    
     async def main():
-        print("🔍 Проверка подключения к базе данных...")
+        print("🔄 Тестирование подключения к базе данных...")
         
-        if await check_database_connection():
-            print("✅ Подключение к базе данных успешно")
+        connected = await test_database_connection()
+        
+        if connected:
+            print("✅ Подключение успешно!")
         else:
-            print("❌ Ошибка подключения к базе данных")
-            return
-        
-        print("🏗️ Инициализация таблиц...")
-        try:
-            await init_database()
-            print("✅ Таблицы созданы успешно")
-        except Exception as e:
-            print(f"❌ Ошибка создания таблиц: {e}")
-        
-        await close_database()
-        print("🎉 Проверка завершена")
+            print("❌ Подключение не удалось!")
+            
+        await close_database_connections()
     
     asyncio.run(main())

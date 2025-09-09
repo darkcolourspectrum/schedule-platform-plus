@@ -1,13 +1,19 @@
 """
-Redis client configuration for Profile Service
-Настройка Redis клиента для кэширования данных
+Redis клиент для Profile Service
+Используется для кэширования данных профилей, дашбордов и активности
 """
 
+import asyncio
 import json
 import logging
-from typing import Optional, Any, Dict, Union
+from typing import Any, Optional, Union
 import redis.asyncio as redis
-from redis.asyncio import ConnectionPool
+from redis.asyncio import Redis
+import sys
+
+# Windows compatibility
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from app.config import settings
 
@@ -18,326 +24,270 @@ class RedisClient:
     """Асинхронный Redis клиент для Profile Service"""
     
     def __init__(self):
-        self.pool: Optional[ConnectionPool] = None
-        self.client: Optional[redis.Redis] = None
+        self._redis: Optional[Redis] = None
         self._connected = False
     
-    async def connect(self):
+    async def connect(self) -> None:
         """Подключение к Redis"""
         try:
-            self.pool = ConnectionPool.from_url(
+            self._redis = redis.from_url(
                 settings.redis_url,
+                encoding="utf-8",
                 decode_responses=True,
-                encoding='utf-8',
-                max_connections=20,
-                retry_on_timeout=True
+                socket_keepalive=True,
+                socket_keepalive_options={},
+                health_check_interval=30
             )
             
-            self.client = redis.Redis(connection_pool=self.pool)
-            
-            # Проверяем соединение
-            await self.client.ping()
+            # Проверяем подключение
+            await self._redis.ping()
             self._connected = True
-            
-            logger.info("Redis connection established successfully")
+            logger.info(f"✅ Подключение к Redis установлено: {settings.redis_url}")
             
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            logger.warning(f"⚠️ Не удалось подключиться к Redis: {e}")
             self._connected = False
-            raise
+            self._redis = None
     
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         """Отключение от Redis"""
+        if self._redis:
+            try:
+                await self._redis.close()
+                logger.info("🔐 Соединение с Redis закрыто")
+            except Exception as e:
+                logger.error(f"Ошибка при закрытии Redis соединения: {e}")
+            finally:
+                self._redis = None
+                self._connected = False
+    
+    async def test_connection(self) -> bool:
+        """Проверка подключения к Redis"""
+        if not self._redis:
+            return False
+        
         try:
-            if self.client:
-                await self.client.close()
-            if self.pool:
-                await self.pool.disconnect()
-            
-            self._connected = False
-            logger.info("Redis connection closed")
-            
+            await self._redis.ping()
+            return True
         except Exception as e:
-            logger.error(f"Error disconnecting from Redis: {e}")
+            logger.error(f"Redis connection test failed: {e}")
+            return False
     
     @property
     def is_connected(self) -> bool:
-        """Проверка состояния соединения"""
-        return self._connected
+        """Проверка статуса подключения"""
+        return self._connected and self._redis is not None
+    
+    # === Основные операции с кэшем ===
     
     async def set(
         self, 
         key: str, 
         value: Any, 
-        ttl: Optional[int] = None,
-        serialize: bool = True
+        ttl: Optional[int] = None
     ) -> bool:
         """
-        Сохранение значения в Redis
+        Установка значения в кэш
         
         Args:
             key: Ключ
-            value: Значение (будет сериализовано в JSON если serialize=True)
+            value: Значение (будет сериализовано в JSON)
             ttl: Время жизни в секундах
-            serialize: Сериализовать ли значение в JSON
+        
+        Returns:
+            bool: True если успешно
         """
-        if not self.client or not self._connected:
-            logger.warning("Redis client not connected")
+        if not self.is_connected:
+            logger.warning("Redis не подключен, кэширование пропущено")
             return False
         
         try:
-            if serialize:
-                value = json.dumps(value, ensure_ascii=False, default=str)
+            # Сериализуем значение в JSON
+            serialized_value = json.dumps(value, ensure_ascii=False, default=str)
             
             if ttl:
-                await self.client.setex(key, ttl, value)
+                await self._redis.setex(key, ttl, serialized_value)
             else:
-                await self.client.set(key, value)
+                await self._redis.set(key, serialized_value)
             
             return True
             
         except Exception as e:
-            logger.error(f"Error setting Redis key {key}: {e}")
+            logger.error(f"Ошибка записи в Redis {key}: {e}")
             return False
     
-    async def get(
-        self, 
-        key: str, 
-        deserialize: bool = True
-    ) -> Optional[Any]:
+    async def get(self, key: str) -> Optional[Any]:
         """
-        Получение значения из Redis
+        Получение значения из кэша
         
         Args:
             key: Ключ
-            deserialize: Десериализовать ли из JSON
+        
+        Returns:
+            Any: Десериализованное значение или None
         """
-        if not self.client or not self._connected:
-            logger.warning("Redis client not connected")
+        if not self.is_connected:
             return None
         
         try:
-            value = await self.client.get(key)
-            
+            value = await self._redis.get(key)
             if value is None:
                 return None
             
-            if deserialize:
-                try:
-                    return json.loads(value)
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to deserialize value for key {key}")
-                    return value
-            
-            return value
+            # Десериализуем из JSON
+            return json.loads(value)
             
         except Exception as e:
-            logger.error(f"Error getting Redis key {key}: {e}")
+            logger.error(f"Ошибка чтения из Redis {key}: {e}")
             return None
     
     async def delete(self, key: str) -> bool:
-        """Удаление ключа из Redis"""
-        if not self.client or not self._connected:
+        """
+        Удаление ключа из кэша
+        
+        Args:
+            key: Ключ для удаления
+        
+        Returns:
+            bool: True если ключ был удален
+        """
+        if not self.is_connected:
             return False
         
         try:
-            result = await self.client.delete(key)
+            result = await self._redis.delete(key)
             return result > 0
+            
         except Exception as e:
-            logger.error(f"Error deleting Redis key {key}: {e}")
+            logger.error(f"Ошибка удаления из Redis {key}: {e}")
             return False
     
     async def exists(self, key: str) -> bool:
-        """Проверка существования ключа"""
-        if not self.client or not self._connected:
+        """
+        Проверка существования ключа
+        
+        Args:
+            key: Ключ для проверки
+        
+        Returns:
+            bool: True если ключ существует
+        """
+        if not self.is_connected:
             return False
         
         try:
-            result = await self.client.exists(key)
+            result = await self._redis.exists(key)
             return result > 0
+            
         except Exception as e:
-            logger.error(f"Error checking Redis key {key}: {e}")
+            logger.error(f"Ошибка проверки существования ключа {key}: {e}")
             return False
     
-    async def expire(self, key: str, ttl: int) -> bool:
-        """Установка времени жизни для ключа"""
-        if not self.client or not self._connected:
-            return False
+    async def clear_pattern(self, pattern: str) -> int:
+        """
+        Удаление всех ключей по шаблону
         
-        try:
-            result = await self.client.expire(key, ttl)
-            return result
-        except Exception as e:
-            logger.error(f"Error setting TTL for Redis key {key}: {e}")
-            return False
-    
-    async def delete_pattern(self, pattern: str) -> int:
+        Args:
+            pattern: Шаблон ключей (например: "user:123:*")
+        
+        Returns:
+            int: Количество удаленных ключей
         """
-        Удаление ключей по паттерну
-        Осторожно: может быть медленным на больших БД
-        """
-        if not self.client or not self._connected:
+        if not self.is_connected:
             return 0
         
         try:
-            keys = await self.client.keys(pattern)
+            keys = await self._redis.keys(pattern)
             if keys:
-                result = await self.client.delete(*keys)
-                return result
+                deleted = await self._redis.delete(*keys)
+                logger.info(f"Удалено ключей по шаблону '{pattern}': {deleted}")
+                return deleted
             return 0
+            
         except Exception as e:
-            logger.error(f"Error deleting Redis keys by pattern {pattern}: {e}")
+            logger.error(f"Ошибка удаления ключей по шаблону {pattern}: {e}")
             return 0
     
-    async def increment(self, key: str, amount: int = 1) -> Optional[int]:
-        """Увеличение числового значения"""
-        if not self.client or not self._connected:
-            return None
-        
-        try:
-            result = await self.client.incrby(key, amount)
-            return result
-        except Exception as e:
-            logger.error(f"Error incrementing Redis key {key}: {e}")
-            return None
+    # === Специальные методы для Profile Service ===
     
-    async def hash_set(
+    async def cache_user_profile(
         self, 
-        key: str, 
-        field: str, 
-        value: Any,
-        serialize: bool = True
+        user_id: int, 
+        profile_data: dict
     ) -> bool:
-        """Установка значения в Redis hash"""
-        if not self.client or not self._connected:
-            return False
-        
-        try:
-            if serialize:
-                value = json.dumps(value, ensure_ascii=False, default=str)
-            
-            await self.client.hset(key, field, value)
-            return True
-        except Exception as e:
-            logger.error(f"Error setting Redis hash {key}:{field}: {e}")
-            return False
+        """Кэширование профиля пользователя"""
+        key = f"user_profile:{user_id}"
+        return await self.set(key, profile_data, settings.cache_user_profile_ttl)
     
-    async def hash_get(
+    async def get_user_profile(self, user_id: int) -> Optional[dict]:
+        """Получение профиля пользователя из кэша"""
+        key = f"user_profile:{user_id}"
+        return await self.get(key)
+    
+    async def cache_dashboard(
         self, 
-        key: str, 
-        field: str, 
-        deserialize: bool = True
-    ) -> Optional[Any]:
-        """Получение значения из Redis hash"""
-        if not self.client or not self._connected:
-            return None
-        
-        try:
-            value = await self.client.hget(key, field)
-            
-            if value is None:
-                return None
-            
-            if deserialize:
-                try:
-                    return json.loads(value)
-                except json.JSONDecodeError:
-                    return value
-            
-            return value
-        except Exception as e:
-            logger.error(f"Error getting Redis hash {key}:{field}: {e}")
-            return None
+        user_id: int, 
+        role: str, 
+        dashboard_data: dict
+    ) -> bool:
+        """Кэширование данных дашборда"""
+        key = f"dashboard:{role}:{user_id}"
+        return await self.set(key, dashboard_data, settings.cache_dashboard_ttl)
     
-    async def hash_delete(self, key: str, field: str) -> bool:
-        """Удаление поля из Redis hash"""
-        if not self.client or not self._connected:
-            return False
-        
-        try:
-            result = await self.client.hdel(key, field)
-            return result > 0
-        except Exception as e:
-            logger.error(f"Error deleting Redis hash field {key}:{field}: {e}")
-            return False
+    async def get_dashboard(self, user_id: int, role: str) -> Optional[dict]:
+        """Получение данных дашборда из кэша"""
+        key = f"dashboard:{role}:{user_id}"
+        return await self.get(key)
     
-    async def health_check(self) -> Dict[str, Any]:
-        """Проверка состояния Redis"""
-        if not self.client:
-            return {"status": "disconnected", "error": "Client not initialized"}
-        
-        try:
-            start_time = await self.client.time()
-            await self.client.ping()
-            info = await self.client.info()
-            
-            return {
-                "status": "healthy",
-                "connected": self._connected,
-                "server_time": start_time,
-                "version": info.get("redis_version"),
-                "used_memory": info.get("used_memory_human"),
-                "connected_clients": info.get("connected_clients")
-            }
-        except Exception as e:
-            return {"status": "unhealthy", "error": str(e)}
+    async def invalidate_user_cache(self, user_id: int) -> int:
+        """Очистка всего кэша пользователя"""
+        pattern = f"*:{user_id}*"
+        return await self.clear_pattern(pattern)
+    
+    async def cache_comments(
+        self, 
+        target_type: str, 
+        target_id: int, 
+        comments_data: list
+    ) -> bool:
+        """Кэширование комментариев"""
+        key = f"comments:{target_type}:{target_id}"
+        return await self.set(key, comments_data, settings.cache_comments_ttl)
+    
+    async def get_comments(
+        self, 
+        target_type: str, 
+        target_id: int
+    ) -> Optional[list]:
+        """Получение комментариев из кэша"""
+        key = f"comments:{target_type}:{target_id}"
+        return await self.get(key)
 
 
 # Глобальный экземпляр Redis клиента
 redis_client = RedisClient()
 
 
-async def get_redis() -> RedisClient:
-    """Dependency для получения Redis клиента"""
-    if not redis_client.is_connected:
-        await redis_client.connect()
-    return redis_client
-
-
-async def init_redis():
-    """Инициализация Redis соединения"""
-    await redis_client.connect()
-
-
-async def close_redis():
-    """Закрытие Redis соединения"""
-    await redis_client.disconnect()
-
-
+# Для тестирования из командной строки
 if __name__ == "__main__":
-    """Скрипт для проверки подключения к Redis"""
-    import asyncio
-    
     async def main():
-        print("🔍 Проверка подключения к Redis...")
+        print("🔄 Тестирование подключения к Redis...")
         
-        try:
-            await redis_client.connect()
-            print("✅ Подключение к Redis успешно")
+        await redis_client.connect()
+        
+        if redis_client.is_connected:
+            print("✅ Подключение к Redis успешно!")
             
-            # Тест записи/чтения
-            test_key = "profile_service:test"
-            test_data = {"message": "Hello from Profile Service", "timestamp": "2025-01-01"}
+            # Тестируем базовые операции
+            await redis_client.set("test_key", {"message": "Hello Redis!"}, 60)
+            value = await redis_client.get("test_key")
+            print(f"📝 Тест записи/чтения: {value}")
             
-            print("📝 Тестирование записи данных...")
-            await redis_client.set(test_key, test_data, ttl=60)
-            
-            print("📖 Тестирование чтения данных...")
-            result = await redis_client.get(test_key)
-            print(f"Результат: {result}")
-            
-            print("🗑️ Удаление тестовых данных...")
-            await redis_client.delete(test_key)
-            
-            # Health check
-            print("🏥 Проверка состояния Redis...")
-            health = await redis_client.health_check()
-            print(f"Состояние: {health}")
-            
-        except Exception as e:
-            print(f"❌ Ошибка при работе с Redis: {e}")
-        finally:
-            await redis_client.disconnect()
-            print("🎉 Проверка завершена")
+            await redis_client.delete("test_key")
+            print("🗑️ Тестовый ключ удален")
+        else:
+            print("❌ Подключение к Redis не удалось!")
+        
+        await redis_client.disconnect()
     
     asyncio.run(main())

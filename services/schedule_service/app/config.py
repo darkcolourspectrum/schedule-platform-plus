@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     cache_schedule_ttl: int = Field(300, env="CACHE_SCHEDULE_TTL")  # 5 минут
     
     # Security
+    jwt_secret_key: str = Field(..., env="JWT_SECRET_KEY")
     internal_api_key: str = Field(..., env="INTERNAL_API_KEY")
     
     @property
