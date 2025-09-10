@@ -1,80 +1,116 @@
 """
-Сервис для работы с кэшированием данных
+Сервис для работы с кэшированием через Redis
 """
 
+import json
 import logging
 from typing import Any, Optional, Dict, List
-from app.database.redis_client import redis_client
+import redis.asyncio as redis
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class CacheService:
-    """Сервис для централизованного управления кэшем"""
+    """Сервис для работы с Redis кэшем"""
     
     def __init__(self):
-        self.redis = redis_client
-        self.default_ttl = 300  # 5 минут по умолчанию
+        self.redis_client: Optional[redis.Redis] = None
+        self.enabled = True
+        self._connected = False
     
-    async def get(self, key: str) -> Optional[Any]:
-        """
-        Получение значения из кэша
+    async def _connect(self):
+        """Внутреннее подключение к Redis"""
+        if self._connected:
+            return
         
-        Args:
-            key: Ключ кэша
-            
-        Returns:
-            Значение из кэша или None
-        """
         try:
-            if not self.redis.is_connected:
-                return None
+            self.redis_client = redis.from_url(
+                settings.redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5
+            )
             
-            value = await self.redis.get(key)
-            if value:
-                logger.debug(f"Cache HIT: {key}")
-            else:
-                logger.debug(f"Cache MISS: {key}")
-            
-            return value
+            # Проверяем подключение
+            await self.redis_client.ping()
+            self._connected = True
+            self.enabled = True
+            logger.info("✅ Redis подключен успешно")
             
         except Exception as e:
-            logger.error(f"Ошибка получения из кэша {key}: {e}")
-            return None
+            logger.warning(f"⚠️ Redis недоступен: {e}")
+            self.enabled = False
+            self._connected = False
+            self.redis_client = None
     
-    async def set(
-        self, 
-        key: str, 
-        value: Any, 
-        ttl: Optional[int] = None
-    ) -> bool:
+    async def disconnect(self):
+        """Отключение от Redis"""
+        if self.redis_client:
+            await self.redis_client.close()
+            self._connected = False
+            logger.info("Redis соединение закрыто")
+    
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """
         Сохранение значения в кэш
         
         Args:
-            key: Ключ кэша
+            key: Ключ
             value: Значение для сохранения
             ttl: Время жизни в секундах
             
         Returns:
             True если успешно сохранено
         """
+        if not self.enabled:
+            return False
+        
         try:
-            if not self.redis.is_connected:
+            await self._connect()
+            if not self._connected:
                 return False
             
-            cache_ttl = ttl or self.default_ttl
-            success = await self.redis.set(key, value, cache_ttl)
+            json_value = json.dumps(value, default=str)
             
-            if success:
-                logger.debug(f"Cache SET: {key} (TTL: {cache_ttl}s)")
+            if ttl:
+                result = await self.redis_client.setex(key, ttl, json_value)
+            else:
+                result = await self.redis_client.set(key, json_value)
             
-            return success
+            return bool(result)
             
         except Exception as e:
             logger.error(f"Ошибка сохранения в кэш {key}: {e}")
             return False
+    
+    async def get(self, key: str) -> Optional[Any]:
+        """
+        Получение значения из кэша
+        
+        Args:
+            key: Ключ
+            
+        Returns:
+            Значение или None
+        """
+        if not self.enabled:
+            return None
+        
+        try:
+            await self._connect()
+            if not self._connected:
+                return None
+            
+            value = await self.redis_client.get(key)
+            if value:
+                return json.loads(value)
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения из кэша {key}: {e}")
+            return None
     
     async def delete(self, key: str) -> bool:
         """
@@ -84,69 +120,128 @@ class CacheService:
             key: Ключ для удаления
             
         Returns:
-            True если ключ был удален
+            True если успешно удалено
         """
+        if not self.enabled:
+            return False
+        
         try:
-            if not self.redis.is_connected:
+            await self._connect()
+            if not self._connected:
                 return False
             
-            success = await self.redis.delete(key)
-            
-            if success:
-                logger.debug(f"Cache DELETE: {key}")
-            
-            return success
+            result = await self.redis_client.delete(key)
+            return result > 0
             
         except Exception as e:
             logger.error(f"Ошибка удаления из кэша {key}: {e}")
             return False
     
-    async def clear_pattern(self, pattern: str) -> int:
-        """
-        Удаление всех ключей по шаблону
-        
-        Args:
-            pattern: Шаблон ключей (например: "user:123:*")
-            
-        Returns:
-            Количество удаленных ключей
-        """
-        try:
-            if not self.redis.is_connected:
-                return 0
-            
-            deleted_count = await self.redis.clear_pattern(pattern)
-            
-            if deleted_count > 0:
-                logger.debug(f"Cache CLEAR PATTERN: {pattern} ({deleted_count} keys)")
-            
-            return deleted_count
-            
-        except Exception as e:
-            logger.error(f"Ошибка очистки по шаблону {pattern}: {e}")
-            return 0
-    
     async def exists(self, key: str) -> bool:
-        """
-        Проверка существования ключа в кэше
+        """Проверка существования ключа"""
+        if not self.enabled:
+            return False
         
-        Args:
-            key: Ключ для проверки
-            
-        Returns:
-            True если ключ существует
-        """
         try:
-            if not self.redis.is_connected:
+            await self._connect()
+            if not self._connected:
                 return False
             
-            return await self.redis.exists(key)
+            result = await self.redis_client.exists(key)
+            return result > 0
             
         except Exception as e:
             logger.error(f"Ошибка проверки существования ключа {key}: {e}")
             return False
     
-    # Специализированные методы для Profile Service
+    async def clear_pattern(self, pattern: str) -> int:
+        """
+        Удаление ключей по паттерну
+        
+        Args:
+            pattern: Паттерн для поиска ключей
+            
+        Returns:
+            Количество удаленных ключей
+        """
+        if not self.enabled:
+            return 0
+        
+        try:
+            await self._connect()
+            if not self._connected:
+                return 0
+            
+            keys = await self.redis_client.keys(pattern)
+            if keys:
+                result = await self.redis_client.delete(*keys)
+                logger.debug(f"Удалено {result} ключей по паттерну {pattern}")
+                return result
+            return 0
+            
+        except Exception as e:
+            logger.error(f"Ошибка удаления по паттерну {pattern}: {e}")
+            return 0
+    
+    async def increment(self, key: str, amount: int = 1) -> Optional[int]:
+        """Увеличение числового значения"""
+        if not self.enabled:
+            return None
+        
+        try:
+            await self._connect()
+            if not self._connected:
+                return None
+            
+            result = await self.redis_client.incrby(key, amount)
+            return result
+            
+        except Exception as e:
+            logger.error(f"Ошибка инкремента ключа {key}: {e}")
+            return None
+    
+    async def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Получение статистики Redis
+        
+        Returns:
+            Словарь со статистикой кэша
+        """
+        try:
+            await self._connect()
+            
+            if not self._connected:
+                return {
+                    "status": "disconnected",
+                    "enabled": False,
+                    "redis_url": settings.redis_url,
+                    "error": "Unable to connect to Redis"
+                }
+            
+            # Получаем информацию о Redis
+            info = await self.redis_client.info()
+            
+            return {
+                "status": "connected",
+                "enabled": True,
+                "redis_url": settings.redis_url,
+                "connected_clients": info.get("connected_clients", 0),
+                "used_memory": info.get("used_memory_human", "0B"),
+                "keyspace_hits": info.get("keyspace_hits", 0),
+                "keyspace_misses": info.get("keyspace_misses", 0),
+                "total_commands_processed": info.get("total_commands_processed", 0),
+                "redis_version": info.get("redis_version", "unknown")
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения статистики Redis: {e}")
+            return {
+                "status": "error",
+                "enabled": False,
+                "error": str(e)
+            }
+    
+    # Методы для специфичного кэширования Profile Service
     
     async def cache_user_profile(
         self, 
@@ -200,20 +295,6 @@ class CacheService:
         key = f"comments:{target_type}:{target_id}"
         return await self.get(key)
     
-    async def cache_user_activities(
-        self, 
-        user_id: int, 
-        activities_data: List[Dict[str, Any]]
-    ) -> bool:
-        """Кэширование активности пользователя"""
-        key = f"activities:{user_id}"
-        return await self.set(key, activities_data, settings.cache_activity_ttl)
-    
-    async def get_user_activities(self, user_id: int) -> Optional[List[Dict[str, Any]]]:
-        """Получение активности пользователя из кэша"""
-        key = f"activities:{user_id}"
-        return await self.get(key)
-    
     async def invalidate_user_cache(self, user_id: int) -> int:
         """Полная очистка кэша пользователя"""
         patterns = [
@@ -233,95 +314,6 @@ class CacheService:
         
         logger.info(f"Очищен кэш пользователя {user_id}: {total_deleted} ключей")
         return total_deleted
-    
-    async def cache_teacher_stats(
-        self, 
-        teacher_id: int, 
-        stats_data: Dict[str, Any]
-    ) -> bool:
-        """Кэширование статистики преподавателя"""
-        key = f"teacher_stats:{teacher_id}"
-        return await self.set(key, stats_data, settings.cache_dashboard_ttl)
-    
-    async def get_teacher_stats(self, teacher_id: int) -> Optional[Dict[str, Any]]:
-        """Получение статистики преподавателя из кэша"""
-        key = f"teacher_stats:{teacher_id}"
-        return await self.get(key)
-    
-    async def cache_teacher_reviews(
-        self, 
-        teacher_id: int, 
-        reviews_data: List[Dict[str, Any]]
-    ) -> bool:
-        """Кэширование отзывов о преподавателе"""
-        key = f"teacher_reviews:{teacher_id}"
-        return await self.set(key, reviews_data, settings.cache_comments_ttl)
-    
-    async def get_teacher_reviews(self, teacher_id: int) -> Optional[List[Dict[str, Any]]]:
-        """Получение отзывов о преподавателе из кэша"""
-        key = f"teacher_reviews:{teacher_id}"
-        return await self.get(key)
-    
-    # Utility методы
-    
-    async def warm_up_cache(self, user_id: int, role: str):
-        """
-        Предварительный прогрев кэша для пользователя
-        
-        Args:
-            user_id: ID пользователя
-            role: Роль пользователя
-        """
-        try:
-            logger.info(f"Начинается прогрев кэша для пользователя {user_id} ({role})")
-            
-            # Здесь можно добавить логику предварительной загрузки
-            # наиболее часто используемых данных
-            
-            # Например, для преподавателей можно загрузить:
-            # - Статистику
-            # - Недавние отзывы
-            # - Расписание на неделю
-            
-            if role == "teacher":
-                # Прогреваем кэш преподавателя
-                pass
-            elif role == "student":
-                # Прогреваем кэш студента
-                pass
-            
-            logger.debug(f"Прогрев кэша завершен для пользователя {user_id}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка прогрева кэша для пользователя {user_id}: {e}")
-    
-    async def get_cache_stats(self) -> Dict[str, Any]:
-        """
-        Получение статистики использования кэша
-        
-        Returns:
-            Словарь со статистикой кэша
-        """
-        try:
-            if not self.redis.is_connected:
-                return {"status": "disconnected", "keys_count": 0}
-            
-            # Здесь можно добавить реальную статистику Redis
-            # Пока возвращаем базовую информацию
-            
-            return {
-                "status": "connected",
-                "redis_url": settings.redis_url,
-                "default_ttl": self.default_ttl,
-                "profile_ttl": settings.cache_user_profile_ttl,
-                "dashboard_ttl": settings.cache_dashboard_ttl,
-                "comments_ttl": settings.cache_comments_ttl,
-                "activity_ttl": settings.cache_activity_ttl
-            }
-            
-        except Exception as e:
-            logger.error(f"Ошибка получения статистики кэша: {e}")
-            return {"status": "error", "error": str(e)}
 
 
 # Глобальный экземпляр сервиса кэширования

@@ -85,8 +85,8 @@ async def create_profile(
 )
 async def get_profile(
     user_id: int = Path(..., description="ID пользователя"),
-    current_user: OptionalCurrentUser,
-    profile_service: ProfileServiceDep
+    profile_service: ProfileServiceDep = None,
+    current_user: OptionalCurrentUser = None
 ):
     """Получение профиля пользователя"""
     try:
@@ -132,9 +132,9 @@ async def get_profile(
 )
 async def update_profile(
     user_id: int = Path(..., description="ID пользователя"),
-    profile_data: ProfileUpdate = ...,
-    current_user: CurrentUser = ...,
-    profile_service: ProfileServiceDep = ...
+    profile_data: ProfileUpdate = None,
+    current_user: CurrentUser = None,
+    profile_service: ProfileServiceDep = None
 ):
     """Обновление профиля пользователя"""
     try:
@@ -149,14 +149,9 @@ async def update_profile(
             )
         
         # Обновляем профиль
-        update_data = profile_data.dict(exclude_unset=True)
-        if not update_data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No data provided for update"
-            )
-        
-        updated_profile = await profile_service.update_profile(user_id, **update_data)
+        updated_profile = await profile_service.update_profile(
+            user_id, **profile_data.dict(exclude_unset=True)
+        )
         
         if not updated_profile:
             raise HTTPException(
@@ -164,7 +159,7 @@ async def update_profile(
                 detail="Profile not found"
             )
         
-        # Получаем обновленный полный профиль
+        # Получаем полный обновленный профиль
         full_profile = await profile_service.get_profile_by_user_id(user_id, current_user_id)
         
         logger.info(f"Обновлен профиль пользователя {user_id}")
@@ -180,6 +175,51 @@ async def update_profile(
         )
 
 
+@router.delete(
+    "/{user_id}",
+    response_model=MessageResponse,
+    summary="Удаление профиля",
+    description="Удаление профиля пользователя"
+)
+async def delete_profile(
+    user_id: int = Path(..., description="ID пользователя"),
+    current_user: CurrentUser = None,
+    profile_service: ProfileServiceDep = None
+):
+    """Удаление профиля пользователя"""
+    try:
+        # Проверяем права доступа
+        current_user_id = current_user["id"]
+        current_user_role = current_user.get("role", {}).get("name", "")
+        
+        if current_user_id != user_id and current_user_role not in ["admin", "moderator"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only delete your own profile"
+            )
+        
+        # Удаляем профиль
+        success = await profile_service.delete_profile(user_id)
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Profile not found"
+            )
+        
+        logger.info(f"Удален профиль пользователя {user_id}")
+        return MessageResponse(message="Profile deleted successfully")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка удаления профиля {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
+
+
 @router.patch(
     "/{user_id}/notifications",
     response_model=SuccessResponse,
@@ -188,9 +228,9 @@ async def update_profile(
 )
 async def update_notification_preferences(
     user_id: int = Path(..., description="ID пользователя"),
-    preferences: NotificationPreferences = ...,
-    current_user: CurrentUser = ...,
-    profile_service: ProfileServiceDep = ...
+    preferences: NotificationPreferences = None,
+    current_user: CurrentUser = None,
+    profile_service: ProfileServiceDep = None
 ):
     """Обновление настроек уведомлений"""
     try:
@@ -236,9 +276,9 @@ async def update_notification_preferences(
 )
 async def update_profile_settings(
     user_id: int = Path(..., description="ID пользователя"),
-    settings: ProfileSettings = ...,
-    current_user: CurrentUser = ...,
-    profile_service: ProfileServiceDep = ...
+    settings: ProfileSettings = None,
+    current_user: CurrentUser = None,
+    profile_service: ProfileServiceDep = None
 ):
     """Обновление настроек профиля"""
     try:
@@ -283,8 +323,8 @@ async def update_profile_settings(
     description="Получение списка публичных профилей с пагинацией"
 )
 async def get_public_profiles(
-    pagination: PaginationParams,
-    profile_service: ProfileServiceDep
+    pagination: PaginationParams = None,
+    profile_service: ProfileServiceDep = None
 ):
     """Получение списка публичных профилей"""
     try:
@@ -322,7 +362,7 @@ async def get_public_profiles(
 async def search_profiles(
     query: str = Query(..., min_length=1, max_length=100, description="Поисковый запрос"),
     limit: int = Query(20, ge=1, le=100, description="Максимальное количество результатов"),
-    profile_service: ProfileServiceDep = ...
+    profile_service: ProfileServiceDep = None
 ):
     """Поиск профилей"""
     try:
@@ -346,8 +386,8 @@ async def search_profiles(
 )
 async def get_profile_stats(
     user_id: int = Path(..., description="ID пользователя"),
-    current_user: OptionalCurrentUser = ...,
-    profile_service: ProfileServiceDep = ...
+    profile_service: ProfileServiceDep = None,
+    current_user: OptionalCurrentUser = None
 ):
     """Получение статистики профиля"""
     try:
@@ -371,12 +411,8 @@ async def get_profile_stats(
                 detail="Profile is private"
             )
         
-        # Базовая статистика профиля
-        stats = {
-            "profile_views": profile.get("profile_views", 0),
-            "total_comments": 0,  # Будет реализовано через CommentService
-            "recent_activities_count": 0  # Будет реализовано через ActivityRepository
-        }
+        # Получаем статистику
+        stats = await profile_service.get_profile_stats(user_id)
         
         return ProfileStatsResponse(**stats)
         
@@ -384,46 +420,6 @@ async def get_profile_stats(
         raise
     except Exception as e:
         logger.error(f"Ошибка получения статистики профиля {user_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error"
-        )
-
-
-@router.delete(
-    "/{user_id}",
-    response_model=MessageResponse,
-    summary="Удаление профиля",
-    description="Удаление профиля пользователя (только для администраторов)"
-)
-async def delete_profile(
-    user_id: int = Path(..., description="ID пользователя"),
-    current_user: CurrentAdmin = ...,
-    profile_service: ProfileServiceDep = ...
-):
-    """Удаление профиля пользователя (только администраторы)"""
-    try:
-        # Проверяем существование профиля
-        profile = await profile_service.get_profile_by_user_id(user_id)
-        if not profile or profile.get("error"):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Profile not found"
-            )
-        
-        # Здесь должна быть логика удаления профиля
-        # Пока возвращаем заглушку
-        logger.warning(f"Запрос на удаление профиля {user_id} от администратора {current_user['id']}")
-        
-        return MessageResponse(
-            message="Profile deletion is not implemented yet",
-            success=False
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Ошибка удаления профиля {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"

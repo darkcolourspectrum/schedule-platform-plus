@@ -43,6 +43,6 @@ def main():
     # Запуск сервера
     uvicorn.run(**uvicorn_config)
 
-
+    
 if __name__ == "__main__":
     main()
