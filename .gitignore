@@ -1,1 +1,91 @@
-.vscode
+# ===== ENVIRONMENT FILES =====
+# Секретные конфигурации НЕ коммитим!
+.env
+.env.local
+.env.production
+.env.development
+.env.staging
+
+# Локальные env файлы сервисов
+services/*/.env
+services/*/.env.local
+
+# ===== PYTHON =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===== VIRTUAL ENVIRONMENTS =====
+venv/
+ENV/
+env/
+.venv/
+.ENV/
+.env/
+
+# ===== DOCKER =====
+# Override файлы (для локальной разработки)
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Docker volumes data
+postgres_data/
+redis_data/
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== LOGS =====
+*.log
+logs/
+
+# ===== TEMP FILES =====
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# ===== UPLOADS =====
+# Загруженные файлы (аватары и т.д.)
+static/uploads/
+static/avatars/
+uploads/
+
+# ===== ALEMBIC =====
+# Локальные версии миграций (если генерируются)
+# migrations/versions/local_*.py
+
+# ===== PYTEST =====
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ===== SECURITY =====
+# Файлы с ключами и сертификатами
+*.pem
+*.key
+*.crt
+ssl/
