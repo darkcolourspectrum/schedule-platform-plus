@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
     # Проверяем Redis (не критично)
     try:
         logger.info("🔄 Проверка Redis...")
-        cache_stats = await cache_service.get_stats()
+        cache_stats = await cache_service.get_cache_stats()
         if cache_stats.get("enabled", False):
             logger.info("✅ Redis доступен")
         else:
@@ -190,7 +190,7 @@ async def health_check():
     
     # Проверка кэша
     try:
-        cache_stats = await cache_service.get_stats()
+        cache_stats = await cache_service.get_cache_stats()
         components["cache"] = cache_stats.get("enabled", False)
     except Exception as e:
         logger.error(f"Health check cache error: {e}")

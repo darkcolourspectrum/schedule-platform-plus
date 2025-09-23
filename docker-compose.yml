@@ -18,6 +18,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - schedule_platform_network
 
   redis:
     image: redis:7-alpine
@@ -32,6 +34,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - schedule_platform_network
 
   # ===== MICROSERVICES =====
   auth-service:
@@ -59,7 +63,7 @@ services:
       DEBUG: ${DEBUG:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       
-      # Security - ОБЩИЕ для всех сервисов!
+      # Security
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-7}
@@ -77,10 +81,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+      start_period: 60s
+    networks:
+      - schedule_platform_network
 
   profile-service:
     build:
@@ -112,7 +119,7 @@ services:
       SCHEDULE_SERVICE_URL: http://schedule-service:8001
       AUTH_SERVICE_TIMEOUT: 30
       
-      # Security - ТЕ ЖЕ ключи что и в auth-service!
+      # Security
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       
@@ -133,17 +140,23 @@ services:
     ports:
       - "8002:8002"
     depends_on:
-      - postgres
-      - redis
-      - auth-service
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
     volumes:
       - avatar_uploads:/app/static/avatars
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8002/health', timeout=5)"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+      start_period: 60s
+    networks:
+      - schedule_platform_network
 
   schedule-service:
     build:
@@ -175,7 +188,7 @@ services:
       PROFILE_SERVICE_URL: http://profile-service:8002
       AUTH_SERVICE_TIMEOUT: 30
       
-      # Security - ТЕ ЖЕ ключи что и в других сервисах!
+      # Security
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       
@@ -199,38 +212,49 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8001/health', timeout=5)"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+      start_period: 60s
+    networks:
+      - schedule_platform_network
 
-  # ===== OPTIONAL: Management Tools =====
+  # ===== MANAGEMENT TOOLS =====
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: schedule_pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@example.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
     ports:
       - "5050:80"
     depends_on:
       - postgres
     restart: unless-stopped
-    profiles:
-      - tools
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - schedule_platform_network
 
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: schedule_redis_commander
     environment:
       REDIS_HOSTS: local:redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      HTTP_USER: ${REDIS_COMMANDER_USER:-admin}
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin}
     ports:
       - "8081:8081"
     depends_on:
       - redis
     restart: unless-stopped
-    profiles:
-      - tools
+    networks:
+      - schedule_platform_network
 
 volumes:
   postgres_data:
@@ -239,7 +263,9 @@ volumes:
     driver: local
   avatar_uploads:
     driver: local
+  pgadmin_data:
+    driver: local
 
 networks:
-  default:
-    name: schedule_platform_network
+  schedule_platform_network:
+    driver: bridge
