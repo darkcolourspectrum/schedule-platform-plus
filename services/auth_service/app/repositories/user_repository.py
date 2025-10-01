@@ -121,12 +121,15 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
         )
     
     async def get_by_token(self, token: str) -> Optional[RefreshToken]:
-        """Получение refresh токена по значению"""
-        return await self.get_by_field(
-            "token", 
-            token, 
-            relationships=["user"]
+        """Получение refresh токена по значению с предзагрузкой user и role"""
+        from sqlalchemy.orm import selectinload
+        
+        query = select(RefreshToken).where(RefreshToken.token == token).options(
+            selectinload(RefreshToken.user).selectinload(User.role)
         )
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
     
     async def revoke_token(self, token: str) -> bool:
         """Отзыв refresh токена"""

@@ -80,13 +80,30 @@ class SecurityManager:
     def get_token_jti(token: str) -> Optional[str]:
         """Получение JTI из токена без полной валидации"""
         try:
-            # Декодируем без проверки подписи для получения JTI
-            payload = jwt.decode(
-                token,
-                options={"verify_signature": False}
-            )
+            import base64
+            import json
+            
+            # JWT формат: header.payload.signature
+            parts = token.split('.')
+            if len(parts) != 3:
+                return None
+                
+            # Декодируем payload (вторая часть)
+            payload_encoded = parts[1]
+            
+            # Добавляем padding для base64
+            missing_padding = len(payload_encoded) % 4
+            if missing_padding:
+                payload_encoded += '=' * (4 - missing_padding)
+                
+            # Декодируем
+            payload_bytes = base64.urlsafe_b64decode(payload_encoded)
+            payload = json.loads(payload_bytes)
+            
             return payload.get("jti")
-        except JWTError:
+            
+        except Exception as e:
+            logger.error(f"Error extracting JTI from token: {e}")
             return None
     
     @staticmethod

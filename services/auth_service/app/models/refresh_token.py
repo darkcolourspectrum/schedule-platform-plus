@@ -33,7 +33,17 @@ class RefreshToken(Base, TimestampMixin):
     @property
     def is_expired(self) -> bool:
         """Проверка истечения срока действия токена"""
-        return datetime.utcnow() >= self.expires_at
+        from datetime import timezone
+        
+        # Убедимся что оба datetime aware (с timezone)
+        now = datetime.now(timezone.utc)
+        expires = self.expires_at
+        
+        # Если expires_at naive - делаем aware
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        
+        return now >= expires
     
     @property
     def is_valid(self) -> bool:
