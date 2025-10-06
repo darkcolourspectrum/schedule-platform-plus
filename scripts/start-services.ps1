@@ -1,5 +1,3 @@
-# Schedule Platform Plus - Start Services (PowerShell) - ИСПРАВЛЕННАЯ ВЕРСИЯ
-
 Write-Host "Starting Schedule Platform Plus" -ForegroundColor Blue
 Write-Host "=" * 50
 

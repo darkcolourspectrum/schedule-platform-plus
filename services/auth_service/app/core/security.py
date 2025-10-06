@@ -43,7 +43,7 @@ class SecurityManager:
         to_encode.update({
             "exp": expire,
             "iat": datetime.utcnow(),
-            "jti": str(uuid.uuid4()),  # Уникальный ID токена для blacklist
+            "jti": str(uuid.uuid4()),  # ID токена для блэклиста
             "type": "access"
         })
         
@@ -103,7 +103,7 @@ class SecurityManager:
             return payload.get("jti")
             
         except Exception as e:
-            logger.error(f"Error extracting JTI from token: {e}")
+            # logger.error(f"Error extracting JTI from token: {e}")
             return None
     
     @staticmethod

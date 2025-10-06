@@ -10,10 +10,8 @@ import httpx
 from datetime import datetime
 from pathlib import Path
 
-# Добавляем путь к приложению
 sys.path.append(str(Path(__file__).parent.parent))
 
-# Windows compatibility
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -22,7 +20,6 @@ from app.database.connection import create_async_session_factory
 from app.repositories.user_repository import UserRepository
 
 
-# Тестовые данные
 TEST_USERS = [
     {
         "email": "testuser1@example.com",
@@ -85,13 +82,13 @@ class AuthServiceTester:
                         if 'user' in locals() and user:
                             await refresh_repo.revoke_user_tokens(user.id)
                             await user_repo.delete(user.id)
-                            print(f"🗑️  Принудительно удален: {user_data['email']}")
+                            print(f"Принудительно удален: {user_data['email']}")
                     except Exception as cleanup_error:
-                        print(f"❌ Не удалось очистить {user_data['email']}: {cleanup_error}")
+                        print(f"Не удалось очистить {user_data['email']}: {cleanup_error}")
     
     async def test_health_endpoints(self):
         """Тест базовых endpoint'ов здоровья"""
-        print("\n🏥 Тестирование health endpoints...")
+        print("\nТестирование health endpoints...")
         
         # Корневой endpoint
         response = await self.client.get("/")
@@ -99,24 +96,24 @@ class AuthServiceTester:
         data = response.json()
         assert data["status"] == "running"
         assert "Auth Service" in data["service"]
-        print("✅ Корневой endpoint работает")
+        print("Корневой endpoint работает")
         
         # Health check
         response = await self.client.get("/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        print("✅ Health check работает")
+        print("Health check работает")
     
     async def test_user_registration(self):
         """Тест регистрации пользователей"""
-        print("\n👤 Тестирование регистрации пользователей...")
+        print("\nТестирование регистрации пользователей...")
         
         for i, user_data in enumerate(TEST_USERS):
             response = await self.client.post("/api/v1/auth/register", json=user_data)
             
             if response.status_code == 409:
-                print(f"⚠️  Пользователь {user_data['email']} уже существует, пропускаем")
+                print(f"Пользователь {user_data['email']} уже существует, пропускаем")
                 continue
             
             assert response.status_code == 201, f"Ошибка регистрации: {response.text}"
@@ -134,22 +131,22 @@ class AuthServiceTester:
             self.users[user_data["email"]] = data["user"]
             self.tokens[user_data["email"]] = data["tokens"]["access_token"]
             
-            print(f"✅ Пользователь {user_data['email']} зарегистрирован (ID: {data['user']['id']})")
+            print(f"Пользователь {user_data['email']} зарегистрирован (ID: {data['user']['id']})")
     
     async def test_duplicate_registration(self):
         """Тест регистрации дубликата"""
-        print("\n🔄 Тестирование дублирующей регистрации...")
+        print("\nТестирование дублирующей регистрации...")
         
         # Пытаемся зарегистрировать пользователя повторно
         response = await self.client.post("/api/v1/auth/register", json=TEST_USERS[0])
         assert response.status_code == 409
         data = response.json()
         assert "already exists" in data["detail"]
-        print("✅ Дублирующая регистрация корректно отклонена")
+        print("Дублирующая регистрация корректно отклонена")
     
     async def test_invalid_registration_data(self):
         """Тест регистрации с невалидными данными"""
-        print("\n❌ Тестирование невалидных данных регистрации...")
+        print("\nТестирование невалидных данных регистрации...")
         
         invalid_cases = [
             # Невалидный email
@@ -174,11 +171,11 @@ class AuthServiceTester:
         for i, invalid_data in enumerate(invalid_cases):
             response = await self.client.post("/api/v1/auth/register", json=invalid_data)
             assert response.status_code == 422, f"Кейс {i+1} должен вернуть 422"
-            print(f"✅ Невалидный кейс {i+1} корректно отклонен")
+            print(f"Невалидный кейс {i+1} корректно отклонен")
     
     async def test_user_login(self):
         """Тест аутентификации пользователей"""
-        print("\n🔐 Тестирование аутентификации пользователей...")
+        print("\nТестирование аутентификации пользователей...")
         
         for user_data in TEST_USERS:
             login_data = {
@@ -189,7 +186,7 @@ class AuthServiceTester:
             response = await self.client.post("/api/v1/auth/login", json=login_data)
             
             if response.status_code == 401:
-                print(f"⚠️  Пользователь {user_data['email']} не найден, пропускаем login тест")
+                print(f"Пользователь {user_data['email']} не найден, пропускаем login тест")
                 continue
             
             assert response.status_code == 200, f"Ошибка входа: {response.text}"
@@ -204,11 +201,11 @@ class AuthServiceTester:
             # Обновляем токены
             self.tokens[user_data["email"]] = data["tokens"]["access_token"]
             
-            print(f"✅ Пользователь {user_data['email']} успешно вошел")
+            print(f"Пользователь {user_data['email']} успешно вошел")
     
     async def test_invalid_login(self):
         """Тест входа с неверными данными"""
-        print("\n🚫 Тестирование неверных данных входа...")
+        print("\nТестирование неверных данных входа...")
         
         # Неверный пароль
         response = await self.client.post("/api/v1/auth/login", json={
@@ -216,7 +213,7 @@ class AuthServiceTester:
             "password": "wrongpassword"
         })
         assert response.status_code == 401
-        print("✅ Неверный пароль корректно отклонен")
+        print("Неверный пароль корректно отклонен")
         
         # Несуществующий пользователь
         response = await self.client.post("/api/v1/auth/login", json={
@@ -224,16 +221,16 @@ class AuthServiceTester:
             "password": "password123"
         })
         assert response.status_code == 401
-        print("✅ Несуществующий пользователь корректно отклонен")
+        print("Несуществующий пользователь корректно отклонен")
     
     async def test_protected_endpoints(self):
         """Тест защищенных endpoint'ов"""
-        print("\n🛡️  Тестирование защищенных endpoints...")
+        print("\nТестирование защищенных endpoints...")
         
         # Тест без токена
         response = await self.client.get("/api/v1/auth/me")
         assert response.status_code == 422 or response.status_code == 401
-        print("✅ Защищенный endpoint недоступен без токена")
+        print("Защищенный endpoint недоступен без токена")
         
         # Тест с валидным токеном
         email = TEST_USERS[0]["email"]
@@ -244,13 +241,13 @@ class AuthServiceTester:
             if response.status_code == 200:
                 data = response.json()
                 assert data["email"] == email
-                print(f"✅ Защищенный endpoint доступен с валидным токеном")
+                print(f"Защищенный endpoint доступен с валидным токеном")
             else:
-                print(f"⚠️  Токен возможно истек, статус: {response.status_code}")
+                print(f"Токен возможно истек, статус: {response.status_code}")
     
     async def test_token_validation(self):
         """Тест валидации токенов"""
-        print("\n🎫 Тестирование валидации токенов...")
+        print("\nТестирование валидации токенов...")
         
         email = TEST_USERS[0]["email"]
         if email in self.tokens:
@@ -261,13 +258,13 @@ class AuthServiceTester:
                 data = response.json()
                 assert data["valid"] == True
                 assert "user_id" in data
-                print("✅ Валидация токена прошла успешно")
+                print("Валидация токена прошла успешно")
             else:
-                print(f"⚠️  Ошибка валидации токена: {response.status_code}")
+                print(f"Ошибка валидации токена: {response.status_code}")
     
     async def test_logout(self):
         """Тест выхода из системы"""
-        print("\n🚪 Тестирование выхода из системы...")
+        print("\nТестирование выхода из системы...")
         
         email = TEST_USERS[0]["email"]
         if email in self.tokens:
@@ -294,21 +291,21 @@ class AuthServiceTester:
                 if response.status_code == 200:
                     data = response.json()
                     assert "message" in data
-                    print("✅ Выход из системы прошел успешно")
+                    print("Выход из системы прошел успешно")
                     
                     # Проверяем, что токен стал недействительным
                     response = await self.client.get("/api/v1/auth/me", headers=headers)
                     assert response.status_code == 401
-                    print("✅ Токен корректно аннулирован")
+                    print("Токен корректно аннулирован")
                 else:
-                    print(f"⚠️  Ошибка выхода: {response.status_code}")
+                    print(f"Ошибка выхода: {response.status_code}")
                     print(f"    Response: {response.text}")
             else:
-                print(f"⚠️  Не удалось залогиниться для теста logout: {login_response.status_code}")
+                print(f"Не удалось залогиниться для теста logout: {login_response.status_code}")
     
     async def run_all_tests(self):
         """Запуск всех тестов"""
-        print("🧪 Запуск интеграционных тестов Auth Service")
+        print("Запуск интеграционных тестов Auth Service")
         print("=" * 50)
         
         try:
@@ -326,14 +323,14 @@ class AuthServiceTester:
             await self.test_token_validation()
             await self.test_logout()
             
-            print("\n🎉 Все интеграционные тесты пройдены успешно!")
+            print("\nВсе интеграционные тесты пройдены успешно!")
             print("=" * 50)
             
             # Финальная очистка
             await self.cleanup_test_users()
             
         except Exception as e:
-            print(f"\n❌ Ошибка в тестах: {e}")
+            print(f"\nОшибка в тестах: {e}")
             import traceback
             traceback.print_exc()
             
@@ -352,22 +349,22 @@ class AuthServiceTester:
 async def main():
     """Главная функция тестирования"""
     
-    print("🚀 Проверка доступности сервера...")
+    print("Проверка доступности сервера...")
     
     # Проверяем, что сервер запущен
     try:
         async with httpx.AsyncClient(base_url=BASE_URL, timeout=5.0) as client:
             response = await client.get("/health")
             if response.status_code != 200:
-                print("❌ Сервер недоступен!")
-                print("💡 Запустите сервер: python run_server.py")
+                print("Сервер недоступен!")
+                print("Запустите сервер: python run_server.py")
                 return False
     except Exception:
-        print("❌ Сервер недоступен!")
-        print("💡 Запустите сервер: python run_server.py")
+        print("Сервер недоступен!")
+        print("Запустите сервер: python run_server.py")
         return False
     
-    print("✅ Сервер доступен, начинаем тестирование...")
+    print("Сервер доступен, начинаем тестирование...")
     
     # Запуск тестов
     tester = AuthServiceTester()
