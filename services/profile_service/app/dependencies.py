@@ -18,6 +18,24 @@ from app.models.activity import ActivityType, ActivityLevel
 
 logger = logging.getLogger(__name__)
 
+def extract_role_name(role_data) -> str:
+    """
+    Универсальная функция для извлечения имени роли
+    Работает и со старым форматом (dict) и с новым (string)
+    
+    Args:
+        role_data: Данные роли - может быть str, dict или None
+        
+    Returns:
+        Имя роли как строка
+    """
+    if role_data is None:
+        return "student"
+    if isinstance(role_data, str):
+        return role_data
+    if isinstance(role_data, dict):
+        return role_data.get("name", "student")
+    return "student"
 
 # Типы для аннотаций
 DatabaseSession = Annotated[AsyncSession, Depends(get_database_session)]
@@ -145,7 +163,7 @@ async def require_role(required_roles: list[str]):
         Dependency function
     """
     async def check_role(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-        user_role = current_user.get("role", {}).get("name", "")
+        user_role = extract_role_name(current_user.get("role"))
         
         if user_role not in required_roles:
             raise HTTPException(
@@ -162,7 +180,7 @@ async def require_role(required_roles: list[str]):
 
 async def get_current_admin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """Dependency для проверки роли администратора"""
-    user_role = current_user.get("role", {}).get("name", "")
+    user_role = extract_role_name(current_user.get("role"))
     
     if user_role not in ["admin", "moderator"]:
         raise HTTPException(
@@ -175,7 +193,7 @@ async def get_current_admin(current_user: Dict[str, Any] = Depends(get_current_u
 
 async def get_current_teacher(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """Dependency для проверки роли преподавателя"""
-    user_role = current_user.get("role", {}).get("name", "")
+    user_role = extract_role_name(current_user.get("role"))
     
     if user_role not in ["teacher", "admin"]:
         raise HTTPException(
@@ -188,7 +206,7 @@ async def get_current_teacher(current_user: Dict[str, Any] = Depends(get_current
 
 async def get_current_student(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """Dependency для проверки роли студента"""
-    user_role = current_user.get("role", {}).get("name", "")
+    user_role = extract_role_name(current_user.get("role"))
     
     if user_role not in ["student", "admin"]:
         raise HTTPException(
@@ -219,7 +237,7 @@ async def verify_profile_access(
         HTTPException: Если доступ запрещен
     """
     current_user_id = current_user.get("id")
-    current_user_role = current_user.get("role", {}).get("name", "")
+    current_user_role = extract_role_name(current_user.get("role"))
     
     # Администраторы видят все профили
     if current_user_role in ["admin", "moderator"]:
@@ -254,7 +272,7 @@ async def verify_comment_access(
         HTTPException: Если доступ запрещен
     """
     current_user_id = current_user.get("id")
-    current_user_role = current_user.get("role", {}).get("name", "")
+    current_user_role = extract_role_name(current_user.get("role"))
     
     # Администраторы могут редактировать любые комментарии
     if current_user_role in ["admin", "moderator"]:

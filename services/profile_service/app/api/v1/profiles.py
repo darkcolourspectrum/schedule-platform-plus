@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/profiles", tags=["Profiles"])
 
+def extract_role_name(role_data) -> str:
+    """Извлекает имя роли из dict или string"""
+    if role_data is None:
+        return "student"
+    if isinstance(role_data, str):
+        return role_data
+    if isinstance(role_data, dict):
+        return role_data.get("name", "student")
+    return "student"
 
 @router.post(
     "/",
@@ -104,7 +113,7 @@ async def get_profile(
         # Проверяем права доступа к приватным данным
         is_owner = viewer_user_id == user_id
         is_admin = (current_user and 
-                   current_user.get("role", {}).get("name") in ["admin", "moderator"])
+                   extract_role_name(current_user.get("role")) in ["admin", "moderator"])
         
         if not is_owner and not is_admin and not profile.get("is_profile_public", True):
             raise HTTPException(
@@ -140,7 +149,7 @@ async def update_profile(
     try:
         # Проверяем права доступа
         current_user_id = current_user["id"]
-        current_user_role = current_user.get("role", {}).get("name", "")
+        current_user_role = extract_role_name(current_user.get("role"))
         
         if current_user_id != user_id and current_user_role not in ["admin", "moderator"]:
             raise HTTPException(
@@ -403,7 +412,7 @@ async def get_profile_stats(
         viewer_user_id = current_user["id"] if current_user else None
         is_owner = viewer_user_id == user_id
         is_admin = (current_user and 
-                   current_user.get("role", {}).get("name") in ["admin", "moderator"])
+                   extract_role_name(current_user.get("role")) in ["admin", "moderator"])
         
         if not is_owner and not is_admin and not profile.get("is_profile_public", True):
             raise HTTPException(

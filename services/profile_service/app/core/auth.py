@@ -14,6 +14,24 @@ from app.core.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+def extract_role_name(role_data) -> str:
+    """
+    Универсальная функция для извлечения имени роли
+    Работает и со старым форматом (dict) и с новым (string)
+    
+    Args:
+        role_data: Данные роли - может быть str, dict или None
+        
+    Returns:
+        Имя роли как строка
+    """
+    if role_data is None:
+        return "student"
+    if isinstance(role_data, str):
+        return role_data
+    if isinstance(role_data, dict):
+        return role_data.get("name", "student")
+    return "student"
 
 class AuthManager:
     """Менеджер аутентификации и авторизации"""
@@ -138,8 +156,8 @@ class AuthManager:
         if not current_user:
             return False
         
-        user_role = current_user.get("role", {})
-        return user_role.get("is_admin", False)
+        role_name = extract_role_name(current_user.get("role"))
+        return role_name in ["admin", "moderator"]
     
     @staticmethod
     def check_teacher_access(current_user: Optional[Dict[str, Any]]) -> bool:
@@ -155,8 +173,8 @@ class AuthManager:
         if not current_user:
             return False
         
-        user_role = current_user.get("role", {})
-        return user_role.get("is_teacher", False) or user_role.get("is_admin", False)
+        role_name = extract_role_name(current_user.get("role"))
+        return role_name in ["teacher", "admin", "moderator"]
     
     @staticmethod
     def require_profile_access(

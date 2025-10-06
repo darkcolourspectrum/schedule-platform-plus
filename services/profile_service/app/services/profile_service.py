@@ -16,6 +16,24 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+def extract_role_name(role_data) -> str:
+    """
+    Универсальная функция для извлечения имени роли
+    Работает и со старым форматом (dict) и с новым (string)
+    
+    Args:
+        role_data: Данные роли - может быть str, dict или None
+        
+    Returns:
+        Имя роли как строка
+    """
+    if role_data is None:
+        return "student"
+    if isinstance(role_data, str):
+        return role_data
+    if isinstance(role_data, dict):
+        return role_data.get("name", "student")
+    return "student"
 
 class ProfileService:
     """Сервис для работы с профилями пользователей"""
@@ -334,7 +352,7 @@ class ProfileService:
                         "avatar_url": profile.avatar_url,
                         "bio": profile.bio,
                         "profile_views": profile.profile_views,
-                        "role": user_data.get("role", {}).get("name", ""),
+                        "role": extract_role_name(user_data.get("role")),
                         "is_verified": user_data.get("is_verified", False)
                     }
                     result.append(profile_data)
@@ -374,7 +392,7 @@ class ProfileService:
                         "avatar_url": profile.avatar_url,
                         "bio": profile.bio,
                         "profile_views": profile.profile_views,
-                        "role": user_data.get("role", {}).get("name", ""),
+                        "role": extract_role_name(user_data.get("role")),
                         "is_verified": user_data.get("is_verified", False)
                     }
                     result.append(profile_data)
@@ -422,24 +440,28 @@ class ProfileService:
     ) -> Dict[str, Any]:
         """Сборка полного профиля пользователя"""
         
-        # Базовые данные из Auth Service
-        full_profile = {
-            "user_id": profile.user_id,
+        # Извлекаем role правильно
+        role_name = extract_role_name(user_data.get("role"))
+        
+        # ИСПРАВЛЕНО: Формируем user_info отдельно для схемы
+        user_info = {
+            "id": user_data.get("id") or profile.user_id,
             "email": user_data.get("email"),
             "first_name": user_data.get("first_name"),
             "last_name": user_data.get("last_name"),
-            "role": user_data.get("role", {}),
+            "role": {"name": role_name},
             "is_verified": user_data.get("is_verified", False),
             "created_at": user_data.get("created_at"),
         }
         
-        # Данные из Profile Service
-        if is_owner:
-            # Владелец видит все данные
-            full_profile.update(profile.to_dict_private())
-        else:
-            # Остальные видят только публичные данные
-            full_profile.update(profile.to_dict_public())
+        # Данные профиля
+        profile_dict = profile.to_dict_private() if is_owner else profile.to_dict_public()
+        
+        # ВАЖНО: Возвращаем в формате который ожидает ProfileResponse
+        full_profile = {
+            "user_info": user_info,  # Вложенный объект
+            **profile_dict  # Остальные поля профиля
+        }
         
         return full_profile
     
