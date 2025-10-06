@@ -1,7 +1,12 @@
 from fastapi import APIRouter, Depends, Response, Request, status
 from fastapi.responses import JSONResponse
 
-from app.dependencies import get_auth_service, get_client_info, get_current_user
+from app.dependencies import (
+    get_auth_service,
+    get_client_info,
+    get_current_user,
+    verify_internal_api_key
+)
 from app.services.auth_service import AuthService
 from app.core.exceptions import RateLimitExceededException
 from app.schemas.auth import (
@@ -51,7 +56,7 @@ async def register(
             key="refresh_token",
             value=result["tokens"]["refresh_token"],
             httponly=True,
-            secure=True,  # HTTPS only в production
+            secure=True,
             samesite="lax",
             max_age=60 * 60 * 24 * 7  # 7 дней
         )
@@ -145,19 +150,7 @@ async def refresh_token(
         )
     
     try:
-        # Пытаемся получить user_id для rate limiting
-        user_id = None
-        try:
-            from app.repositories.user_repository import RefreshTokenRepository
-            from app.database.connection import get_async_session
-            
-            # Это не оптимально, но для rate limiting нужен user_id
-            # В production лучше хранить user_id в refresh token payload
-            pass
-        except:
-            pass
-        
-        result = await auth_service.refresh_access_token(refresh_token, user_id=user_id)
+        result = await auth_service.refresh_access_token(refresh_token, user_id=None)
         
         return AccessTokenResponse(
             access_token=result["access_token"],
@@ -262,7 +255,7 @@ async def get_current_user_info(
         is_admin=current_user.is_admin,
         is_teacher=current_user.is_teacher,
         is_student=current_user.is_student,
-        permissions=[]  # Добавим позже систему разрешений
+        permissions=[]
     )
 
 
@@ -270,17 +263,24 @@ async def get_current_user_info(
     "/validate-token",
     status_code=status.HTTP_200_OK,
     summary="Валидация access токена",
-    description="Проверка валидности текущего access токена с Redis blacklist"
+    description="Проверка валидности текущего access токена с Redis blacklist (для внутренних сервисов)"
 )
 async def validate_token(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    internal_key_valid: bool = Depends(verify_internal_api_key)
 ):
-    """Валидация access токена с использованием Redis кеша"""
+    """
+    Валидация access токена с использованием Redis кеша
+    
+    ИСПРАВЛЕНО: Теперь требует X-Internal-API-Key для защиты от внешних запросов
+    """
     
     return {
         "valid": True,
         "user_id": current_user.id,
-        "role": current_user.role.name
+        "role": current_user.role.name,
+        "email": current_user.email,
+        "studio_id": current_user.studio_id
     }
 
 

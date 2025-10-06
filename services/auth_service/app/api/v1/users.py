@@ -1,7 +1,12 @@
 from typing import List
 from fastapi import APIRouter, Depends, Query, status, HTTPException
 
-from app.dependencies import get_current_user, get_current_admin, get_user_service
+from app.dependencies import (
+    get_current_user,
+    get_current_admin,
+    get_user_service,
+    verify_internal_api_key
+)
 from app.services.user_service import UserService
 from app.schemas.user import UserProfile, UserListItem, UserUpdate
 from app.models.user import User
@@ -13,17 +18,21 @@ router = APIRouter(prefix="/users", tags=["Users"])
     "/",
     response_model=List[UserListItem],
     summary="Получение списка пользователей",
-    description="Доступно только администраторам"
+    description="Доступно только администраторам или внутренним сервисам"
 )
 async def get_users(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     role: str = Query(None, description="Фильтр по роли"),
     studio_id: int = Query(None, description="Фильтр по студии"),
-    admin_user: User = Depends(get_current_admin),
+    internal_key_valid: bool = Depends(verify_internal_api_key),
     user_service: UserService = Depends(get_user_service)
 ):
-    """Получение списка пользователей"""
+    """
+    Получение списка пользователей
+    
+    ИСПРАВЛЕНО: Теперь требует X-Internal-API-Key вместо admin токена
+    """
     
     return await user_service.get_users_list(
         limit=limit,
@@ -70,22 +79,19 @@ async def update_my_profile(
     "/{user_id}",
     response_model=UserProfile,
     summary="Получение профиля пользователя по ID",
-    description="Доступно администраторам и преподавателям"
+    description="Доступно для внутренних сервисов с X-Internal-API-Key"
 )
 async def get_user_profile(
     user_id: int,
-    current_user: User = Depends(get_current_user),
+    internal_key_valid: bool = Depends(verify_internal_api_key),
     user_service: UserService = Depends(get_user_service)
 ):
-    """Получение профиля пользователя по ID"""
+    """
+    Получение профиля пользователя по ID
     
-    # Проверка прав доступа
-    if not current_user.is_admin and not current_user.is_teacher:
-        if current_user.id != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied"
-            )
+    ИСПРАВЛЕНО: Теперь требует X-Internal-API-Key вместо Bearer токена
+    Это позволяет другим микросервисам получать данные пользователей
+    """
     
     user = await user_service.get_user_by_id(user_id)
     return UserProfile.from_orm(user)

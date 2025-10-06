@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.core.exceptions import (
 )
 from app.models.user import User
 from app.models.role import RoleType
+from app.config import settings
 
 security = HTTPBearer(auto_error=False)
 
@@ -32,6 +33,38 @@ async def get_user_service(db: AsyncSession = Depends(get_async_session)) -> Use
 async def get_studio_service(db: AsyncSession = Depends(get_async_session)) -> StudioService:
     """Dependency для получения StudioService"""
     return StudioService(db)
+
+
+async def verify_internal_api_key(
+    x_internal_api_key: Optional[str] = Header(None)
+) -> bool:
+    """
+    НОВЫЙ: Dependency для проверки внутреннего API ключа
+    Используется для защиты эндпоинтов от внешних запросов
+    
+    Args:
+        x_internal_api_key: Ключ из заголовка X-Internal-API-Key
+        
+    Returns:
+        True если ключ валиден
+        
+    Raises:
+        HTTPException: Если ключ невалиден или отсутствует
+    """
+    if not x_internal_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Internal API key required",
+            headers={"WWW-Authenticate": "X-Internal-API-Key"}
+        )
+    
+    if x_internal_api_key != settings.internal_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid internal API key"
+        )
+    
+    return True
 
 
 async def get_optional_current_user(
@@ -94,40 +127,30 @@ async def get_current_admin(
 async def get_current_teacher(
     current_user: User = Depends(get_current_user)
 ) -> User:
-    """Dependency для проверки роли преподавателя или администратора"""
-    if not (current_user.is_admin or current_user.is_teacher):
-        raise PermissionDeniedException(required_role="teacher or admin")
-    return current_user
-
-
-async def get_current_student(
-    current_user: User = Depends(get_current_user)
-) -> User:
-    """Dependency для проверки любой авторизованной роли"""
-    # Все авторизованные пользователи могут быть студентами
+    """Dependency для проверки роли преподавателя"""
+    if not (current_user.is_teacher or current_user.is_admin):
+        raise PermissionDeniedException(required_role="teacher")
     return current_user
 
 
 def get_client_info(request: Request) -> dict:
-    """Получение информации о клиенте из запроса"""
-    return {
-        "ip_address": request.client.host if request.client else None,
-        "user_agent": request.headers.get("User-Agent"),
-        "device_info": request.headers.get("X-Device-Info")  # Кастомный заголовок для устройства
-    }
-
-
-async def rate_limit_check(
-    request: Request,
-    auth_service: AuthService = Depends(get_auth_service)
-) -> None:
     """
-    Простая проверка rate limiting
-    В production рекомендуется использовать Redis или специализированные решения
-    """
-    # Базовая реализация - можно расширить
-    client_ip = request.client.host if request.client else "unknown"
+    Получение информации о клиенте
     
-    # Здесь можно добавить логику rate limiting
-    # Например, с использованием Redis для подсчета запросов
-    pass
+    Args:
+        request: FastAPI Request
+        
+    Returns:
+        Dict с информацией о клиенте
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        ip_address = forwarded_for.split(",")[0].strip()
+    else:
+        ip_address = request.client.host if request.client else "unknown"
+    
+    return {
+        "ip_address": ip_address,
+        "user_agent": request.headers.get("User-Agent", "unknown"),
+        "device_info": request.headers.get("User-Agent", "unknown")
+    }
