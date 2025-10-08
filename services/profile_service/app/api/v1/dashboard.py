@@ -309,13 +309,32 @@ async def get_system_stats(
 ):
     """Получение системной статистики (только администраторы)"""
     try:
+        # ИСПРАВЛЕНИЕ: Проверяем что current_user это словарь
+        if not isinstance(current_user, dict):
+            logger.error(f"current_user не является словарем: {type(current_user)}, значение: {current_user}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid user data format"
+            )
+        
         # Проверяем права администратора
-        current_user_role = current_user.get("role", {}).get("name", "")
+        user_role = current_user.get("role")
+        
+        # Обрабатываем разные форматы role
+        if isinstance(user_role, dict):
+            current_user_role = user_role.get("name", "")
+        elif isinstance(user_role, str):
+            current_user_role = user_role
+        else:
+            logger.error(f"Неожиданный формат role: {type(user_role)}, значение: {user_role}")
+            current_user_role = ""
+        
+        logger.info(f"Проверка прав для пользователя ID={current_user.get('id')}, роль={current_user_role}")
         
         if current_user_role not in ["admin", "moderator"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin role required"
+                detail=f"Admin role required. Your role: {current_user_role}"
             )
         
         # Получаем системную статистику через приватный метод сервиса
@@ -326,8 +345,8 @@ async def get_system_stats(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Ошибка получения системной статистики: {e}")
+        logger.error(f"Ошибка получения системной статистики: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to load system statistics"
+            detail=f"Failed to load system statistics: {str(e)}"
         )
