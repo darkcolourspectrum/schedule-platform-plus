@@ -84,7 +84,7 @@ class AvatarService:
             return {
                 "success": True,
                 "filename": filename,
-                "url": f"/static/avatars/{filename}",
+                "url": f"http://localhost:8080/static/avatars/{filename}",
                 "size": len(processed_image)
             }
             
@@ -163,7 +163,7 @@ class AvatarService:
             
             return {
                 "filename": filename,
-                "url": f"/static/avatars/{filename}",
+                "url": f"http://localhost:8080/static/avatars/{filename}",
                 "size_bytes": file_stats.st_size,
                 "width": width,
                 "height": height,

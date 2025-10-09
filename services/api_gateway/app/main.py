@@ -85,9 +85,14 @@ async def proxy_request(service_name: str, path: str, request: Request):
     elif service_name == "auth":
         target_url = f"{target_service}/api/v1/auth/{path}"
     elif service_name == "profile":
-        if path.startswith("dashboard/"):
+        if path.startswith("avatars/"):
+            # /api/profile/avatars/1 -> /api/v1/avatars/1
+            target_url = f"{target_service}/api/v1/{path}"
+        elif path.startswith("dashboard"):
+            # /api/profile/dashboard -> /api/v1/dashboard
             target_url = f"{target_service}/api/v1/{path}"
         else:
+            # Все остальное через profiles
             target_url = f"{target_service}/api/v1/profiles/{path}"
     elif service_name == "schedule":
         target_url = f"{target_service}/api/v1/schedule/{path}"

@@ -12,6 +12,8 @@ from app.schemas.profile import AvatarUploadResponse, AvatarInfo, MessageRespons
 from app.schemas.common import SuccessResponse
 from app.models.activity import ActivityType, ActivityLevel
 
+from app.dependencies import extract_role_name
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/avatars", tags=["Avatars"])
@@ -33,7 +35,7 @@ async def upload_avatar(
     try:
         # Проверяем права доступа
         current_user_id = current_user["id"]
-        current_user_role = current_user.get("role", {}).get("name", "")
+        current_user_role = extract_role_name(current_user.get("role"))
         
         if current_user_id != user_id and current_user_role not in ["admin", "moderator"]:
             raise HTTPException(
@@ -142,7 +144,7 @@ async def delete_avatar(
     try:
         # Проверяем права доступа
         current_user_id = current_user["id"]
-        current_user_role = current_user.get("role", {}).get("name", "")
+        current_user_role = extract_role_name(current_user.get("role"))
         
         if current_user_id != user_id and current_user_role not in ["admin", "moderator"]:
             raise HTTPException(
