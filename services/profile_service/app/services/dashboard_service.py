@@ -456,21 +456,32 @@ class DashboardService:
     async def _get_system_statistics(self) -> Dict[str, Any]:
         """Получение общей статистики системы"""
         try:
+            logger.info("Начало получения системной статистики")
+            
             # Статистика пользователей
+            logger.info("Запрос пользователей с ролью student из Auth Service")
             all_students = await auth_client.get_users_by_role("student")
+            logger.info(f"Получено студентов: {len(all_students)}")
+            
+            logger.info("Запрос пользователей с ролью teacher из Auth Service")
             all_teachers = await auth_client.get_users_by_role("teacher")
+            logger.info(f"Получено преподавателей: {len(all_teachers)}")
             
             # Статистика профилей
+            logger.info("Подсчет профилей в БД")
             total_profiles = await self.profile_repo.count()
             public_profiles = await self.profile_repo.count(is_profile_public=True)
+            logger.info(f"Всего профилей: {total_profiles}, публичных: {public_profiles}")
             
             # Статистика комментариев
             total_comments = await self.comment_repo.count()
+            logger.info(f"Всего комментариев: {total_comments}")
             
             # Статистика активности
             total_activities = await self.activity_repo.count()
+            logger.info(f"Всего активностей: {total_activities}")
             
-            return {
+            result = {
                 "users": {
                     "total_students": len(all_students),
                     "total_teachers": len(all_teachers),
@@ -487,8 +498,11 @@ class DashboardService:
                 }
             }
             
+            logger.info(f"Системная статистика собрана: {result}")
+            return result
+            
         except Exception as e:
-            logger.error(f"Ошибка получения системной статистики: {e}")
+            logger.error(f"Ошибка получения системной статистики: {e}", exc_info=True)
             return {}
     
     async def _get_review_author_info(self, author_id: int) -> Dict[str, Any]:

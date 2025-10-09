@@ -69,7 +69,7 @@ class AuthServiceClient:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
-                    f"{self.base_url}/api/v1/users",
+                    f"{self.base_url}/api/v1/users/",
                     headers=self.headers,
                     params={"role": role}
                 )

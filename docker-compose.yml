@@ -37,6 +37,40 @@ services:
     networks:
       - schedule_platform_network
 
+  # ===== API GATEWAY =====
+  api-gateway:
+    build:
+      context: ./services/api_gateway
+      dockerfile: Dockerfile
+    container_name: api_gateway
+    environment:
+      APP_NAME: API Gateway
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      
+      # Microservices URLs
+      AUTH_SERVICE_URL: http://auth-service:8000
+      PROFILE_SERVICE_URL: http://profile-service:8002
+      SCHEDULE_SERVICE_URL: http://schedule-service:8001
+    ports:
+      - "8080:8080"
+    depends_on:
+      - auth-service
+      - profile-service
+      - schedule-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - schedule_platform_network
+
   # ===== MICROSERVICES =====
   auth-service:
     build:

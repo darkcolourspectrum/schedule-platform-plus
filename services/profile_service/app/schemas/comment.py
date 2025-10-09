@@ -176,7 +176,7 @@ class CommentTargetInfo(BaseModel):
 
 class UserCommentsResponse(BaseModel):
     """Комментарии пользователя"""
-    comments: List[Dict[str, Any]]  # Включает target_info
+    comments: List[Dict[str, Any]] 
     total: int
     limit: int
     offset: int
