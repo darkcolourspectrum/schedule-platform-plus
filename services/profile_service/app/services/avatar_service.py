@@ -55,28 +55,31 @@ class AvatarService:
             filename = f"user_{user_id}_{uuid.uuid4().hex}{file_extension}"
             filepath = os.path.join(self.upload_path, filename)
             
-            # Читаем содержимое файла
-            file_content = await file.read()
+            # Читаем файл
+            contents = await file.read()
             
             # Обрабатываем изображение
             processed_image = await self.image_processor.process_avatar(
-                image_data=file_content,
-                max_size=(300, 300),  # Стандартный размер аватара
-                quality=85
+                image_data=contents,
+                max_size=(800, 800),
+                quality=90
             )
             
             if not processed_image:
-                logger.error(f"Не удалось обработать изображение для пользователя {user_id}")
+                logger.error(f"Не удалось обработать изображение от пользователя {user_id}")
                 return {
                     "success": False,
                     "error": "Failed to process image"
                 }
             
-            # Сохраняем обработанное изображение
+            # Сохраняем файл
             async with aiofiles.open(filepath, 'wb') as f:
                 await f.write(processed_image)
             
-            # Удаляем старый аватар если есть
+            # Получаем размер файла
+            file_size = os.path.getsize(filepath)
+            
+            # Удаляем старые аватары пользователя
             await self._cleanup_old_avatars(user_id, filename)
             
             logger.info(f"Аватар пользователя {user_id} успешно загружен: {filename}")
@@ -84,8 +87,15 @@ class AvatarService:
             return {
                 "success": True,
                 "filename": filename,
-                "url": f"http://localhost:8080/static/avatars/{filename}",
-                "size": len(processed_image)
+                "url": settings.get_avatar_url(filename),
+                "size": file_size
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка загрузки аватара пользователя {user_id}: {e}")
+            return {
+                "success": False,
+                "error": "Upload failed"
             }
             
         except Exception as e:

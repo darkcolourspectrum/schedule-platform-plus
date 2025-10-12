@@ -4,15 +4,14 @@ API endpoints для работы с аватарами пользователе
 
 import logging
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Path
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
+import os
 
-from app.dependencies import CurrentUser, ProfileServiceDep
+from app.dependencies import CurrentUser, ProfileServiceDep, extract_role_name
 from app.services.avatar_service import avatar_service
-from app.schemas.profile import AvatarUploadResponse, AvatarInfo, MessageResponse
+from app.schemas.profile import AvatarUploadResponse, AvatarInfo
 from app.schemas.common import SuccessResponse
-from app.models.activity import ActivityType, ActivityLevel
-
-from app.dependencies import extract_role_name
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +127,67 @@ async def get_avatar_info(
             detail="Internal server error"
         )
 
+@router.get(
+    "/files/{filename}",
+    summary="Получение файла аватара",
+    description="Отдача файла аватара пользователя",
+    response_class=FileResponse
+)
+async def get_avatar_file(
+    filename: str = Path(..., description="Имя файла аватара")
+):
+    """Получение файла аватара"""
+    try:
+        from fastapi.responses import FileResponse
+        import os
+        from app.config import settings
+        
+        # Проверяем безопасность имени файла (защита от path traversal)
+        if '..' in filename or '/' in filename or '\\' in filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid filename"
+            )
+        
+        # Проверяем что файл начинается с user_
+        if not filename.startswith('user_'):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Avatar not found"
+            )
+        
+        filepath = os.path.join(settings.avatar_upload_full_path, filename)
+        
+        if not os.path.exists(filepath):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Avatar file not found"
+            )
+        
+        # Определяем MIME тип
+        if filename.endswith('.png'):
+            media_type = 'image/png'
+        elif filename.endswith('.jpg') or filename.endswith('.jpeg'):
+            media_type = 'image/jpeg'
+        elif filename.endswith('.webp'):
+            media_type = 'image/webp'
+        else:
+            media_type = 'application/octet-stream'
+        
+        return FileResponse(
+            path=filepath,
+            media_type=media_type,
+            filename=filename
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка получения файла аватара {filename}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 
 @router.delete(
     "/{user_id}",

@@ -140,18 +140,25 @@ services:
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_URL: redis://redis:6379/1
+      REDIS_URL: redis://redis:6379/2
       
       # App settings
       APP_NAME: Profile Service
       APP_VERSION: 1.0.0
       DEBUG: ${DEBUG:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      HOST: 0.0.0.0
+      PORT: 8002
+      
+      # Base URL для формирования ссылок
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      API_PREFIX: /api/profile
       
       # Microservices integration
       AUTH_SERVICE_URL: http://auth-service:8000
       SCHEDULE_SERVICE_URL: http://schedule-service:8001
       AUTH_SERVICE_TIMEOUT: 30
+      SCHEDULE_SERVICE_TIMEOUT: 30
       
       # Security
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}

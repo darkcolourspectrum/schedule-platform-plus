@@ -134,7 +134,8 @@ class UserProfile(BaseModel):
     def avatar_url(self) -> Optional[str]:
         """URL аватара пользователя"""
         if self.avatar_filename:
-            return f"/static/avatars/{self.avatar_filename}"
+            from app.config import settings
+            return settings.get_avatar_url(self.avatar_filename)
         return None
     
     @property
