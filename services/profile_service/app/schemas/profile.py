@@ -24,6 +24,8 @@ class ProfileCreate(ProfileBase):
 
 class ProfileUpdate(BaseModel):
     """Схема для обновления профиля"""
+    first_name: Optional[str] = Field(None, min_length=1, max_length=100, description="Имя")
+    last_name: Optional[str] = Field(None, min_length=1, max_length=100, description="Фамилия")
     display_name: Optional[str] = Field(None, max_length=100)
     bio: Optional[str] = Field(None, max_length=1000)
     phone: Optional[str] = Field(None, max_length=20)

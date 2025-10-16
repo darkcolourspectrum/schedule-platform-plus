@@ -95,3 +95,29 @@ async def get_user_profile(
     
     user = await user_service.get_user_by_id(user_id)
     return UserProfile.from_orm(user)
+
+@router.put(
+    "/{user_id}/profile",
+    response_model=UserProfile,
+    summary="Обновление профиля пользователя (внутренний endpoint)",
+    description="Доступно только для внутренних сервисов с X-Internal-API-Key"
+)
+async def update_user_profile_internal(
+    user_id: int,
+    profile_data: UserUpdate,
+    internal_key_valid: bool = Depends(verify_internal_api_key),
+    user_service: UserService = Depends(get_user_service)
+):
+    """
+    Обновление профиля пользователя для внутренних сервисов
+    
+    Этот endpoint позволяет другим микросервисам
+    обновлять данные пользователя в Auth Service
+    """
+    
+    updated_user = await user_service.update_user_profile(
+        user_id=user_id,
+        update_data=profile_data
+    )
+    
+    return UserProfile.from_orm(updated_user)

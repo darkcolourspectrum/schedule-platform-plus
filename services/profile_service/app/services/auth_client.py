@@ -167,6 +167,51 @@ class AuthServiceClient:
         """
         return await self.validate_token(token)
     
+    async def update_user(self, user_id: int, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Обновление данных пользователя в Auth Service
+        
+        Args:
+            user_id: ID пользователя
+            update_data: Данные для обновления (first_name, last_name, phone, bio, avatar_url)
+            
+        Returns:
+            Dict с обновленными данными пользователя или None
+        """
+        try:
+            # Фильтруем только разрешенные поля для Auth Service
+            allowed_fields = ['first_name', 'last_name', 'phone', 'bio', 'avatar_url']
+            filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields and v is not None}
+            
+            if not filtered_data:
+                logger.debug(f"Нет данных для обновления в Auth Service для пользователя {user_id}")
+                return await self.get_user_by_id(user_id)
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.put(
+                    f"{self.base_url}/api/v1/users/{user_id}/profile",
+                    headers=self.headers,
+                    json=filtered_data
+                )
+                
+                if response.status_code == 200:
+                    user_data = response.json()
+                    logger.info(f"Обновлены данные пользователя {user_id} в Auth Service: {list(filtered_data.keys())}")
+                    return user_data
+                elif response.status_code == 404:
+                    logger.warning(f"Пользователь {user_id} не найден в Auth Service")
+                    return None
+                else:
+                    logger.error(f"Ошибка обновления пользователя {user_id}: {response.status_code} - {response.text}")
+                    return None
+                    
+        except httpx.ConnectError:
+            logger.error(f"Не удалось подключиться к Auth Service: {self.base_url}")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении пользователя {user_id}: {e}")
+            return None
+    
     async def health_check(self) -> bool:
         """
         Проверка доступности Auth Service

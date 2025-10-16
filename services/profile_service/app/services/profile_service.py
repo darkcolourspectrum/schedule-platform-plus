@@ -179,17 +179,44 @@ class ProfileService:
             Обновленный профиль или None
         """
         try:
-            profile = await self.profile_repo.update_profile(user_id, **update_data)
+            # Проверяем наличие полей которые нужно обновить в Auth Service
+            auth_fields = {}
+            profile_fields = {}
+            
+            for key, value in update_data.items():
+                if key in ['first_name', 'last_name', 'phone', 'bio', 'avatar_url']:
+                    auth_fields[key] = value
+                else:
+                    profile_fields[key] = value
+            
+            # Если есть поля для Auth Service - обновляем их там
+            if auth_fields:
+                logger.info(f"Обновление полей в Auth Service для пользователя {user_id}: {list(auth_fields.keys())}")
+                updated_user_data = await auth_client.update_user(user_id, auth_fields)
+                
+                if not updated_user_data:
+                    logger.warning(f"Не удалось обновить данные в Auth Service для пользователя {user_id}")
+                else:
+                    logger.info(f"Успешно обновлены поля в Auth Service: {list(auth_fields.keys())}")
+            
+            # Обновляем профиль в Profile Service только если есть поля для него
+            profile = None
+            if profile_fields:
+                profile = await self.profile_repo.update_profile(user_id, **profile_fields)
+            else:
+                # Если нет полей для Profile Service, просто получаем существующий профиль
+                profile = await self.profile_repo.get_by_user_id(user_id)
             
             if profile:
                 # Логируем активность
+                all_updated_fields = list(auth_fields.keys()) + list(profile_fields.keys())
                 await self.activity_repo.log_activity(
                     user_id=user_id,
                     activity_type=ActivityType.PROFILE_UPDATED,
                     title="Профиль обновлен",
-                    description=f"Обновлены поля: {', '.join(update_data.keys())}",
+                    description=f"Обновлены поля: {', '.join(all_updated_fields)}",
                     level=ActivityLevel.LOW,
-                    activity_data={"updated_fields": list(update_data.keys())}
+                    activity_data={"updated_fields": all_updated_fields}
                 )
                 
                 # Очищаем кэш
