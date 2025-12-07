@@ -24,8 +24,8 @@ class UserCreate(UserBase):
 class UserUpdate(BaseModel):
     """Схема для обновления пользователя"""
     
-    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    first_name: Optional[str] = Field(None, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
     phone: Optional[str] = Field(None, max_length=20)
     bio: Optional[str] = Field(None, description="Биография")
     avatar_url: Optional[str] = Field(None, description="URL аватара")

@@ -199,12 +199,15 @@ class ProfileService:
                 else:
                     logger.info(f"Успешно обновлены поля в Auth Service: {list(auth_fields.keys())}")
             
-            # Обновляем профиль в Profile Service только если есть поля для него
-            profile = None
-            if profile_fields:
-                profile = await self.profile_repo.update_profile(user_id, **profile_fields)
+            # Обновляем профиль в Profile Service
+            if profile_fields or auth_fields:
+                # Если обновляли поля в Auth Service, синхронизируем их в Profile Service
+                update_data_for_profile = {**profile_fields}
+                if auth_fields and 'bio' in auth_fields:
+                    update_data_for_profile['bio'] = auth_fields['bio']
+    
+                profile = await self.profile_repo.update_profile(user_id, **update_data_for_profile)
             else:
-                # Если нет полей для Profile Service, просто получаем существующий профиль
                 profile = await self.profile_repo.get_by_user_id(user_id)
             
             if profile:

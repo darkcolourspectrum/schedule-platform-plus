@@ -1,11 +1,13 @@
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
 from app.repositories.user_repository import UserRepository
 from app.core.exceptions import UserNotFoundException
 from app.schemas.user import UserUpdate, UserListItem
 from app.models.user import User
 
+logger = logging.getLogger(__name__)
 
 class UserService:
     """Сервис для работы с пользователями"""
@@ -25,6 +27,9 @@ class UserService:
         if not user:
             raise UserNotFoundException()
         
+        logger.info(f"Загружен пользователь {user_id}: bio='{user.bio}', first_name='{user.first_name}'")
+        logger.info(f"Атрибуты объекта user: {[attr for attr in dir(user) if not attr.startswith('_')]}")
+
         return user
     
     async def get_users_list(
@@ -73,17 +78,43 @@ class UserService:
     ) -> User:
         """Обновление профиля пользователя"""
         
-        # Получаем только не None значения
-        update_dict = update_data.dict(exclude_unset=True, exclude_none=True)
-        
-        if not update_dict:
-            # Если нет данных для обновления, возвращаем существующего пользователя
-            return await self.get_user_by_id(user_id)
-        
-        updated_user = await self.user_repo.update(user_id, **update_dict)
-        
-        if not updated_user:
-            raise UserNotFoundException()
-        
-        # Загружаем обновленного пользователя со связями
-        return await self.get_user_by_id(user_id)
+        try:
+            logger.info(f"Начало обновления профиля пользователя {user_id}")
+            logger.info(f"Данные для обновления: {update_data.dict(exclude_unset=True)}")
+            
+            # Получаем только не None значения
+            update_dict = update_data.dict(exclude_unset=True, exclude_none=True)
+            
+            if not update_dict:
+                logger.info(f"Нет данных для обновления пользователя {user_id}, возвращаем существующего")
+                # Если нет данных для обновления, возвращаем существующего пользователя
+                return await self.get_user_by_id(user_id)
+            
+            logger.info(f"Обновляем пользователя {user_id} с данными: {update_dict}")
+            
+            # Получаем пользователя до обновления
+            existing_user = await self.get_user_by_id(user_id)
+            logger.info(f"Существующие данные пользователя {user_id}: bio='{existing_user.bio}'")
+            
+            updated_user = await self.user_repo.update(user_id, **update_dict)
+            
+            if not updated_user:
+                logger.error(f"update() вернул None для пользователя {user_id}")
+                raise UserNotFoundException()
+            
+            await self.db.close()
+
+            # Загружаем обновленного пользователя со связями
+            result_user = await self.get_user_by_id(user_id)
+            logger.info(f"Результат обновления пользователя {user_id}: bio='{result_user.bio}'")
+            
+            logger.info(f"Профиль пользователя {user_id} успешно обновлен")
+            return result_user
+            
+        except UserNotFoundException:
+            logger.error(f"Пользователь {user_id} не найден")
+            raise
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении профиля пользователя {user_id}: {str(e)}")
+            logger.exception("Детальная ошибка:")
+            raise

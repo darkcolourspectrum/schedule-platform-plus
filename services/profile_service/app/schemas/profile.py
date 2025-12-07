@@ -24,11 +24,10 @@ class ProfileCreate(ProfileBase):
 
 class ProfileUpdate(BaseModel):
     """Схема для обновления профиля"""
-    first_name: Optional[str] = Field(None, min_length=1, max_length=100, description="Имя")
-    last_name: Optional[str] = Field(None, min_length=1, max_length=100, description="Фамилия")
+    first_name: Optional[str] = Field(None, max_length=100, description="Имя")
+    last_name: Optional[str] = Field(None, max_length=100, description="Фамилия")
     display_name: Optional[str] = Field(None, max_length=100)
     bio: Optional[str] = Field(None, max_length=1000)
-    phone: Optional[str] = Field(None, max_length=20)
     date_of_birth: Optional[date] = None
     is_profile_public: Optional[bool] = None
     show_contact_info: Optional[bool] = None
@@ -90,122 +89,113 @@ class ProfileResponse(BaseModel):
     student_info: Optional[Dict[str, Any]] = None
     teacher_info: Optional[Dict[str, Any]] = None
     
-    # Временные метки
-    created_at: datetime
-    updated_at: datetime
+    # Вычисляемые поля
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_verified: Optional[bool] = None
+    created_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
     
-    @validator('notification_preferences', pre=True)
-    def parse_notification_preferences(cls, v):
-        """Парсим настройки уведомлений из JSON"""
-        if isinstance(v, dict):
-            return NotificationPreferences(**v)
-        return v
-    
-    @validator('profile_settings', pre=True)
-    def parse_profile_settings(cls, v):
-        """Парсим настройки профиля из JSON"""
-        if isinstance(v, dict):
-            return ProfileSettings(**v)
-        return v
+    class Config:
+        from_attributes = True
 
 
 class ProfilePublicResponse(BaseModel):
-    """Схема публичного профиля (для других пользователей)"""
-    user_id: int
+    """Публичная схема профиля (для других пользователей)"""
+    user_info: UserInfo
     display_name: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
-    age: Optional[int] = None
-    role: str
-    is_verified: bool = False
+    
+    # Контактная информация только если разрешено
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    
+    # Публичная статистика
     profile_views: int = 0
-    last_activity: Optional[datetime] = None
-    created_at: datetime
+    
+    # Дополнительная информация по ролям (только публичная)
+    student_info: Optional[Dict[str, Any]] = None
+    teacher_info: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        from_attributes = True
 
 
 class ProfileSearchResult(BaseModel):
     """Схема результата поиска профилей"""
-    user_id: int
-    display_name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    bio: Optional[str] = None
-    role: str
-    is_verified: bool = False
-    profile_views: int = 0
+    profiles: List[ProfilePublicResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
 
 
 class ProfileListResponse(BaseModel):
-    """Схема списка профилей с пагинацией"""
-    profiles: List[ProfileSearchResult]
+    """Схема ответа со списком профилей"""
+    profiles: List[ProfilePublicResponse]
     total: int
-    limit: int
-    offset: int
-    has_more: bool
+    page: int
+    size: int
+    pages: int
 
 
 class AvatarUploadResponse(BaseModel):
     """Схема ответа на загрузку аватара"""
     success: bool
-    filename: Optional[str] = None
-    url: Optional[str] = None
-    size: Optional[int] = None
-    error: Optional[str] = None
+    filename: str
+    url: str
+    size: int
 
 
 class AvatarInfo(BaseModel):
     """Схема информации об аватаре"""
     filename: str
     url: str
-    size_bytes: int
-    width: int
-    height: int
-    format: str
-    created_at: float
-    modified_at: float
+    size: int
+    mime_type: str
+    uploaded_at: datetime
 
 
 class StudentInfo(BaseModel):
     """Дополнительная информация о студенте"""
-    preferred_time: Optional[str] = Field(None, description="Предпочитаемое время занятий")
-    skill_level: Optional[str] = Field(None, description="Уровень навыков")
-    goals: Optional[str] = Field(None, description="Цели обучения")
-    notes: Optional[str] = Field(None, description="Дополнительные заметки")
+    level: Optional[str] = None
+    goals: Optional[List[str]] = None
+    preferences: Optional[Dict[str, Any]] = None
+    learning_style: Optional[str] = None
 
 
 class TeacherInfo(BaseModel):
     """Дополнительная информация о преподавателе"""
-    specializations: List[str] = Field(default_factory=list, description="Специализации")
-    experience_years: Optional[int] = Field(None, description="Опыт работы в годах")
-    education: Optional[str] = Field(None, description="Образование")
-    achievements: Optional[str] = Field(None, description="Достижения")
-    teaching_style: Optional[str] = Field(None, description="Стиль преподавания")
-    available_hours: Optional[Dict[str, Any]] = Field(None, description="Доступные часы")
+    subjects: Optional[List[str]] = None
+    experience_years: Optional[int] = None
+    education: Optional[List[str]] = None
+    certificates: Optional[List[str]] = None
+    teaching_style: Optional[str] = None
+    hourly_rate: Optional[float] = None
 
 
 class ProfileStatsResponse(BaseModel):
-    """Схема статистики профиля"""
-    profile_views: int
-    total_comments: int
-    recent_activities_count: int
-    
-    # Для студентов
-    total_lessons: Optional[int] = None
-    completed_lessons: Optional[int] = None
-    
-    # Для преподавателей
-    total_students: Optional[int] = None
-    average_rating: Optional[float] = None
-    total_reviews: Optional[int] = None
+    """Схема статистики профилей"""
+    total_profiles: int
+    active_profiles: int
+    verified_profiles: int
+    public_profiles: int
+    students_count: int
+    teachers_count: int
+    recent_registrations: int
 
 
 class MessageResponse(BaseModel):
     """Схема ответа с сообщением"""
     message: str
-    success: bool = True
 
 
 class ErrorResponse(BaseModel):
     """Схема ответа с ошибкой"""
     error: str
     detail: Optional[str] = None
-    success: bool = False
+    code: Optional[str] = None

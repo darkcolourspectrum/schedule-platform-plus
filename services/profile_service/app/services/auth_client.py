@@ -40,6 +40,7 @@ class AuthServiceClient:
                 
                 if response.status_code == 200:
                     user_data = response.json()
+                    logger.info(f"Auth Service вернул пользователя {user_id}: bio='{user_data.get('bio')}', first_name='{user_data.get('first_name')}'")
                     logger.debug(f"Получен пользователь {user_id}: {user_data.get('email')}")
                     return user_data
                 elif response.status_code == 404:
