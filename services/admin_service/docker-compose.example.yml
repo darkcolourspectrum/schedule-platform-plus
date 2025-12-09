@@ -1,0 +1,107 @@
+# Пример интеграции Admin Service в docker-compose.yml
+# Скопируйте эти секции в ваш основной docker-compose.yml
+
+version: '3.8'
+
+services:
+  # ==================== ADMIN SERVICE ====================
+  admin-service:
+    build:
+      context: ./services/admin_service
+      dockerfile: Dockerfile
+    container_name: admin_service
+    environment:
+      # Application
+      APP_NAME: Admin Service
+      APP_VERSION: 1.0.0
+      DEBUG: ${DEBUG:-true}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      
+      # Admin Service Database
+      DATABASE_URL: postgresql+asyncpg://admin_user:${ADMIN_DB_PASSWORD}@postgres:5432/admin_service_db
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: admin_service_db
+      DATABASE_USER: admin_user
+      DATABASE_PASSWORD: ${ADMIN_DB_PASSWORD}
+      
+      # Auth Service Database (READ-ONLY)
+      AUTH_DB_URL: postgresql+asyncpg://auth_user:${AUTH_DB_PASSWORD}@postgres:5432/auth_service_db
+      AUTH_DB_HOST: postgres
+      AUTH_DB_PORT: 5432
+      AUTH_DB_NAME: auth_service_db
+      AUTH_DB_USER: auth_user
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/3
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 3
+      
+      # Security
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: HS256
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      
+      # CORS
+      ALLOWED_ORIGINS: '["http://localhost:3000","http://localhost:5173","http://localhost:8080"]'
+      ALLOW_CREDENTIALS: true
+      
+      # External Services
+      AUTH_SERVICE_URL: http://auth-service:8000
+      PROFILE_SERVICE_URL: http://profile-service:8002
+      SCHEDULE_SERVICE_URL: http://schedule-service:8001
+      
+      # Cache TTL
+      CACHE_USER_TTL: 300
+      CACHE_STUDIO_TTL: 600
+      CACHE_CLASSROOM_TTL: 600
+      
+      # Logging
+      LOG_LEVEL: INFO
+    
+    ports:
+      - "8003:8003"
+    
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+    
+    volumes:
+      - ./services/admin_service:/app
+    
+    restart: unless-stopped
+    
+    networks:
+      - schedule_platform_network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==================== POSTGRES (обновить init скрипт) ====================
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-databases.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - schedule_platform_network
+
+networks:
+  schedule_platform_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
