@@ -23,52 +23,6 @@ from app.schemas.profile import (
     ErrorResponse
 )
 
-# Схемы комментариев
-from app.schemas.comment import (
-    CommentBase,
-    CommentCreate,
-    CommentUpdate,
-    AuthorInfo,
-    CommentResponse,
-    CommentListResponse,
-    ReviewCreate,
-    ReviewResponse,
-    RatingStats,
-    TeacherReviewsResponse,
-    AdminNoteCreate,
-    CommentModerationRequest,
-    LessonCommentCreate,
-    CommentStatsResponse,
-    RecentCommentsResponse,
-    CommentTargetInfo,
-    UserCommentsResponse
-)
-
-# Схемы дашбордов
-from app.schemas.dashboard import (
-    ActivityItem,
-    LessonInfo,
-    UpcomingLessons,
-    LessonHistory,
-    TeacherInfo,
-    AvailableTeachers,
-    StudentStats,
-    TeachingStats,
-    TodaySchedule,
-    ReviewsSummary,
-    MyComments,
-    QuickAction,
-    SystemStats,
-    TopTeacher,
-    AdminNoteItem,
-    StudentDashboard,
-    TeacherDashboard,
-    AdminDashboard,
-    DefaultDashboard,
-    DashboardResponse,
-    DashboardError
-)
-
 # Общие схемы
 from app.schemas.common import (
     SuccessResponse,

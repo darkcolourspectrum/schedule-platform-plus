@@ -7,9 +7,7 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.profile import UserProfile
-from app.models.activity import ActivityType, ActivityLevel
 from app.repositories.profile_repository import ProfileRepository
-from app.repositories.activity_repository import ActivityRepository
 from app.services.auth_client import auth_client
 from app.services.cache_service import cache_service
 from app.config import settings
@@ -41,7 +39,6 @@ class ProfileService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.profile_repo = ProfileRepository(db)
-        self.activity_repo = ActivityRepository(db)
     
     async def get_profile_by_user_id(
         self, 
@@ -143,15 +140,6 @@ class ProfileService:
             )
             
             if profile:
-                # Логируем активность
-                await self.activity_repo.log_activity(
-                    user_id=user_id,
-                    activity_type=ActivityType.PROFILE_CREATED,
-                    title="Профиль создан",
-                    description="Создан новый профиль пользователя",
-                    level=ActivityLevel.MEDIUM
-                )
-                
                 # Очищаем кэш
                 await self._clear_profile_cache(user_id)
                 
@@ -211,17 +199,6 @@ class ProfileService:
                 profile = await self.profile_repo.get_by_user_id(user_id)
             
             if profile:
-                # Логируем активность
-                all_updated_fields = list(auth_fields.keys()) + list(profile_fields.keys())
-                await self.activity_repo.log_activity(
-                    user_id=user_id,
-                    activity_type=ActivityType.PROFILE_UPDATED,
-                    title="Профиль обновлен",
-                    description=f"Обновлены поля: {', '.join(all_updated_fields)}",
-                    level=ActivityLevel.LOW,
-                    activity_data={"updated_fields": all_updated_fields}
-                )
-                
                 # Очищаем кэш
                 await self._clear_profile_cache(user_id)
                 
@@ -252,16 +229,6 @@ class ProfileService:
             profile = await self.profile_repo.update_avatar(user_id, avatar_filename)
             
             if profile:
-                # Логируем активность
-                await self.activity_repo.log_activity(
-                    user_id=user_id,
-                    activity_type=ActivityType.AVATAR_UPLOADED,
-                    title="Аватар обновлен",
-                    description="Загружен новый аватар",
-                    level=ActivityLevel.LOW,
-                    activity_data={"avatar_filename": avatar_filename}
-                )
-                
                 # Очищаем кэш
                 await self._clear_profile_cache(user_id)
                 
@@ -292,16 +259,6 @@ class ProfileService:
             profile = await self.profile_repo.update_notification_preferences(user_id, preferences)
             
             if profile:
-                # Логируем активность
-                await self.activity_repo.log_activity(
-                    user_id=user_id,
-                    activity_type=ActivityType.NOTIFICATIONS_UPDATED,
-                    title="Настройки уведомлений обновлены",
-                    description="Изменены настройки уведомлений",
-                    level=ActivityLevel.LOW,
-                    activity_data={"preferences": preferences}
-                )
-                
                 # Очищаем кэш
                 await self._clear_profile_cache(user_id)
                 
@@ -332,16 +289,6 @@ class ProfileService:
             profile = await self.profile_repo.update_profile_settings(user_id, settings_data)
             
             if profile:
-                # Логируем активность
-                await self.activity_repo.log_activity(
-                    user_id=user_id,
-                    activity_type=ActivityType.SETTINGS_UPDATED,
-                    title="Настройки профиля обновлены",
-                    description="Изменены настройки профиля",
-                    level=ActivityLevel.LOW,
-                    activity_data={"settings": settings_data}
-                )
-                
                 # Очищаем кэш
                 await self._clear_profile_cache(user_id)
                 
@@ -523,14 +470,10 @@ class ProfileService:
         try:
             cache_keys = [
                 f"profile_full:{user_id}",
-                f"dashboard:*:{user_id}",  # Очищаем также кэш дашбордов
             ]
             
             for key in cache_keys:
-                if "*" in key:
-                    await cache_service.clear_pattern(key)
-                else:
-                    await cache_service.delete(key)
+                await cache_service.delete(key)
             
             logger.debug(f"Очищен кэш профиля пользователя {user_id}")
             

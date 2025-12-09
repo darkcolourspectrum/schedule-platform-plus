@@ -10,11 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import get_database_session
 from app.services.auth_client import auth_client
 from app.services.profile_service import ProfileService
-from app.services.comment_service import CommentService
-from app.services.dashboard_service import DashboardService
 from app.services.avatar_service import avatar_service
-from app.repositories.activity_repository import ActivityRepository
-from app.models.activity import ActivityType, ActivityLevel
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +40,6 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_database_session)]
 async def get_profile_service(db: DatabaseSession) -> ProfileService:
     """Dependency для получения ProfileService"""
     return ProfileService(db)
-
-
-async def get_comment_service(db: DatabaseSession) -> CommentService:
-    """Dependency для получения CommentService"""
-    return CommentService(db)
-
-
-async def get_dashboard_service(db: DatabaseSession) -> DashboardService:
-    """Dependency для получения DashboardService"""
-    return DashboardService(db)
-
-
-async def get_activity_repository(db: DatabaseSession) -> ActivityRepository:
-    """Dependency для получения ActivityRepository"""
-    return ActivityRepository(db)
 
 
 # Аутентификация и авторизация
@@ -252,118 +233,6 @@ async def verify_profile_access(
     return current_user
 
 
-async def verify_comment_access(
-    comment_id: int,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-    comment_service: CommentService = Depends(get_comment_service)
-) -> Dict[str, Any]:
-    """
-    Проверка доступа к комментарию
-    
-    Args:
-        comment_id: ID комментария
-        current_user: Текущий пользователь
-        comment_service: Сервис комментариев
-        
-    Returns:
-        Данные текущего пользователя
-        
-    Raises:
-        HTTPException: Если доступ запрещен
-    """
-    current_user_id = current_user.get("id")
-    current_user_role = extract_role_name(current_user.get("role"))
-    
-    # Администраторы могут редактировать любые комментарии
-    if current_user_role in ["admin", "moderator"]:
-        return current_user
-    
-    # Получаем комментарий для проверки автора
-    comment = await comment_service.comment_repo.get_by_id(comment_id)
-    if not comment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Comment not found"
-        )
-    
-    # Проверяем, что пользователь - автор комментария
-    if comment.author_id != current_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only edit your own comments"
-        )
-    
-    return current_user
-
-
-# Логирование активности
-
-async def log_activity(
-    request: Request,
-    activity_type: ActivityType,
-    title: str,
-    description: Optional[str] = None,
-    level: ActivityLevel = ActivityLevel.LOW,
-    target_type: Optional[str] = None,
-    target_id: Optional[int] = None,
-    activity_data: Optional[Dict[str, Any]] = None,
-    user_id: Optional[int] = None,
-    activity_repo: ActivityRepository = Depends(get_activity_repository)
-):
-    """
-    Dependency для логирования активности пользователя
-    
-    Args:
-        request: FastAPI request объект
-        activity_type: Тип активности
-        title: Заголовок активности
-        description: Описание активности
-        level: Уровень важности
-        target_type: Тип связанного объекта
-        target_id: ID связанного объекта
-        activity_data: Дополнительные данные
-        user_id: ID пользователя (если не передан, берется из текущего)
-        activity_repo: Репозиторий активности
-    """
-    try:
-        # Получаем ID пользователя
-        if not user_id:
-            try:
-                current_user = await get_current_user(
-                    authorization=request.headers.get("authorization"),
-                    x_user_id=request.headers.get("x-user-id")
-                )
-                user_id = current_user.get("id")
-            except HTTPException:
-                # Если не удалось получить пользователя, пропускаем логирование
-                return
-        
-        if not user_id:
-            return
-        
-        # Получаем IP и User-Agent
-        ip_address = request.client.host if request.client else None
-        user_agent = request.headers.get("user-agent")
-        
-        # Логируем активность
-        await activity_repo.log_activity(
-            user_id=user_id,
-            activity_type=activity_type,
-            title=title,
-            description=description,
-            level=level,
-            target_type=target_type,
-            target_id=target_id,
-            activity_data=activity_data,
-            ip_address=ip_address,
-            user_agent=user_agent
-        )
-        
-    except Exception as e:
-        # Не прерываем выполнение если логирование не удалось
-        logger.error(f"Ошибка логирования активности: {e}")
-
-
 # Валидация параметров
 
 def validate_pagination(
@@ -405,7 +274,4 @@ CurrentAdmin = Annotated[Dict[str, Any], Depends(get_current_admin)]
 CurrentTeacher = Annotated[Dict[str, Any], Depends(get_current_teacher)]
 CurrentStudent = Annotated[Dict[str, Any], Depends(get_current_student)]
 ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
-CommentServiceDep = Annotated[CommentService, Depends(get_comment_service)]
-DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
-ActivityRepositoryDep = Annotated[ActivityRepository, Depends(get_activity_repository)]
 PaginationParams = Annotated[Dict[str, int], Depends(validate_pagination)]

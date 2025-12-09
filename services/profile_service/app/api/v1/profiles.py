@@ -18,7 +18,6 @@ from app.schemas.profile import (
     ProfileSettings, ProfileStatsResponse, MessageResponse
 )
 from app.schemas.common import SuccessResponse, ErrorResponse
-from app.models.activity import ActivityType, ActivityLevel
 
 logger = logging.getLogger(__name__)
 
