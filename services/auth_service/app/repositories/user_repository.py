@@ -20,7 +20,7 @@ class UserRepository(BaseRepository[User]):
         return await self.get_by_field(
             "email", 
             email, 
-            relationships=["role", "studio"]
+            relationships=["role"]
         )
     
     async def get_by_vk_id(self, vk_id: str) -> Optional[User]:
@@ -28,7 +28,7 @@ class UserRepository(BaseRepository[User]):
         return await self.get_by_field(
             "vk_id", 
             vk_id, 
-            relationships=["role", "studio"]
+            relationships=["role"]
         )
     
     async def create_user(

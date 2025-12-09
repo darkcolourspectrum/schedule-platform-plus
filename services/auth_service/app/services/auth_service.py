@@ -1,4 +1,3 @@
-
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,98 +26,6 @@ from app.services.redis_rate_limiter import AuthRateLimiter
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
 from app.config import settings
-
-async def login_user(
-        self,
-        email: str,
-        password: str,
-        device_info: Optional[str] = None,
-        ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Аутентификация пользователя с rate limiting"""
-        
-        # Rate limiting для входа
-        if ip_address:
-            try:
-                await self.rate_limiter.check_login_rate_limit(email, ip_address)
-            except RateLimitExceededException as e:
-                logger.warning(f"Login rate limit exceeded for {email} from IP {ip_address}")
-                raise e
-        
-        # Получение пользователя
-        user = await self.user_repo.get_by_email(email)
-        if not user:
-            raise InvalidCredentialsException()
-        
-        # Проверка блокировки аккаунта
-        if user.is_locked:
-            locked_until = user.locked_until.isoformat() if user.locked_until else None
-            raise AccountLockedException(locked_until=locked_until)
-        
-        # Проверка активности пользователя
-        if not user.is_active:
-            raise UserInactiveException()
-        
-        # Проверка пароля
-        if not self.security.verify_password(password, user.hashed_password):
-            # Увеличиваем счетчик неудачных попыток
-            await self.user_repo.increment_login_attempts(user.id)
-            
-            # Проверяем лимит попыток
-            if user.login_attempts >= 5:  # После 5 попыток блокируем
-                await self.user_repo.lock_user_account(user.id, lock_duration_minutes=30)
-            
-            raise InvalidCredentialsException()
-        
-        # Сброс счетчика попыток при успешном входе
-        await self.user_repo.reset_login_attempts(user.id)
-        await self.user_repo.update_last_login(user.id)
-        
-        # Сбрасываем rate limit для email при успешном входе
-        if ip_address:
-            await self.rate_limiter.reset_failed_login_attempts(email, ip_address)
-        
-        # Создание токенов
-        tokens = create_tokens_for_user(
-            user_id=user.id,
-            email=user.email,
-            role=user.role.name,
-            studio_id=user.studio_id
-        )
-        
-        # Сохранение refresh токена
-        refresh_expires_at = datetime.utcnow() + timedelta(
-            days=settings.jwt_refresh_token_expire_days
-        )
-        
-        await self.refresh_token_repo.create_refresh_token(
-            user_id=user.id,
-            token=tokens["refresh_token"],
-            expires_at=refresh_expires_at,
-            device_info=device_info,
-            ip_address=ip_address,
-            user_agent=user_agent
-        )
-        
-        logger.info(f"User logged in: {email} from IP {ip_address}")
-        
-        return {
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "role": user.role.name,
-                "studio_id": user.studio_id,
-                "studio_name": user.studio.name if user.studio else None,
-                "is_active": user.is_active,
-                "is_verified": user.is_verified
-            },
-            "tokens": tokens
-        }
-
-
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +120,7 @@ class AuthService:
                 "last_name": user.last_name,
                 "role": student_role.name,
                 "studio_id": user.studio_id,
-                "studio_name": None,  # У нового пользователя нет студии
+                "studio_name": None,  # Studio relationship удалён
                 "is_active": user.is_active,
                 "is_verified": user.is_verified
             },
@@ -289,7 +196,7 @@ class AuthService:
                 "last_name": user.last_name,
                 "role": user.role.name,
                 "studio_id": user.studio_id,
-                "studio_name": user.studio.name if user.studio else None,
+                "studio_name": None,  # Studio relationship удалён
                 "is_active": user.is_active,
                 "is_verified": user.is_verified
             },
@@ -407,7 +314,7 @@ class AuthService:
         
         user = await self.user_repo.get_by_id(
             token_payload.user_id,
-            relationships=["role", "studio"]
+            relationships=["role"]  # УБРАЛ "studio"
         )
         
         if not user:

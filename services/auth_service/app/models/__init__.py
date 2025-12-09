@@ -1,22 +1,13 @@
-"""
-Импорт всех моделей для правильной инициализации SQLAlchemy
-"""
-
-# Импортируем все модели в правильном порядке
-from app.models.base import Base, TimestampMixin
-from app.models.role import Role, RoleType
-from app.models.studio import Studio
+"""Models package для Auth Service"""
 from app.models.user import User
+from app.models.role import Role
 from app.models.refresh_token import RefreshToken, TokenBlacklist
+from app.models.base import Base
 
-# Список всех моделей для экспорта
 __all__ = [
-    "Base",
-    "TimestampMixin",
-    "Role",
-    "RoleType", 
-    "Studio",
     "User",
+    "Role",
     "RefreshToken",
-    "TokenBlacklist"
+    "TokenBlacklist",
+    "Base"
 ]

@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   # ===== DATABASES =====
   postgres:
@@ -43,6 +45,7 @@ services:
       context: ./services/api_gateway
       dockerfile: Dockerfile
     container_name: api_gateway
+    restart: always
     environment:
       APP_NAME: API Gateway
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -55,13 +58,14 @@ services:
       AUTH_SERVICE_URL: http://auth-service:8000
       PROFILE_SERVICE_URL: http://profile-service:8002
       SCHEDULE_SERVICE_URL: http://schedule-service:8001
+      ADMIN_SERVICE_URL: http://admin-service:8003
     ports:
       - "8080:8080"
     depends_on:
       - auth-service
       - profile-service
       - schedule-service
-    restart: unless-stopped
+      - admin-service
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
       interval: 30s
@@ -72,19 +76,22 @@ services:
       - schedule_platform_network
 
   # ===== MICROSERVICES =====
+  
+  # AUTH SERVICE
   auth-service:
     build:
       context: ./services/auth_service
       dockerfile: Dockerfile
     container_name: auth_service
+    restart: always
     environment:
       # Database
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: auth_service_db
-      DATABASE_USER: auth_user
-      DATABASE_PASSWORD: auth_password
-      DATABASE_URL: ${AUTH_DATABASE_URL}
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/auth_service_db
       
       # Redis
       REDIS_HOST: redis
@@ -113,7 +120,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    # ✅ АВТОМАТИЧЕСКИЕ МИГРАЦИИ
+    command: >
+      sh -c "
+        echo '🔄 Applying Auth Service migrations...' &&
+        alembic upgrade head &&
+        echo '✅ Migrations applied, starting Auth Service...' &&
+        python run_server.py
+      "
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
       interval: 30s
@@ -123,19 +137,21 @@ services:
     networks:
       - schedule_platform_network
 
+  # PROFILE SERVICE
   profile-service:
     build:
       context: ./services/profile_service
       dockerfile: Dockerfile
     container_name: profile_service
+    restart: always
     environment:
       # Database
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: profile_service_db
-      DATABASE_USER: profile_user
-      DATABASE_PASSWORD: profile_password
-      DATABASE_URL: ${PROFILE_DATABASE_URL}
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/profile_service_db
       
       # Redis
       REDIS_HOST: redis
@@ -150,36 +166,32 @@ services:
       HOST: 0.0.0.0
       PORT: 8002
       
-      # Base URL для формирования ссылок
+      # Base URL
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       API_PREFIX: /api/profile
       
       # Microservices integration
       AUTH_SERVICE_URL: http://auth-service:8000
       SCHEDULE_SERVICE_URL: http://schedule-service:8001
-      AUTH_SERVICE_TIMEOUT: 30
-      SCHEDULE_SERVICE_TIMEOUT: 30
+      AUTH_SERVICE_INTERNAL_KEY: ${INTERNAL_API_KEY}
       
       # Security
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: HS256
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       
-      # Profile specific
-      MAX_AVATAR_SIZE_MB: ${MAX_AVATAR_SIZE_MB:-5}
-      ALLOWED_IMAGE_TYPES: ${ALLOWED_IMAGE_TYPES:-["image/jpeg","image/png","image/webp"]}
-      AVATAR_UPLOAD_PATH: /app/static/avatars
-      
-      # Cache TTL
-      CACHE_USER_PROFILE_TTL: ${CACHE_USER_PROFILE_TTL:-600}
-      CACHE_DASHBOARD_TTL: ${CACHE_DASHBOARD_TTL:-300}
-      CACHE_COMMENTS_TTL: ${CACHE_COMMENTS_TTL:-180}
-      CACHE_ACTIVITY_TTL: ${CACHE_ACTIVITY_TTL:-3600}
+      # Avatars
+      MAX_AVATAR_SIZE_MB: 5
+      ALLOWED_AVATAR_TYPES: jpg,jpeg,png,gif,webp
+      AVATAR_UPLOAD_PATH: static/avatars
       
       # CORS
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:8080"]}
       ALLOW_CREDENTIALS: true
     ports:
       - "8002:8002"
+    volumes:
+      - avatar_uploads:/app/static/avatars
     depends_on:
       postgres:
         condition: service_healthy
@@ -187,9 +199,14 @@ services:
         condition: service_healthy
       auth-service:
         condition: service_healthy
-    volumes:
-      - avatar_uploads:/app/static/avatars
-    restart: unless-stopped
+    # ✅ АВТОМАТИЧЕСКИЕ МИГРАЦИИ
+    command: >
+      sh -c "
+        echo '🔄 Applying Profile Service migrations...' &&
+        alembic upgrade head &&
+        echo '✅ Migrations applied, starting Profile Service...' &&
+        python run_server.py
+      "
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8002/health', timeout=5)"]
       interval: 30s
@@ -199,35 +216,39 @@ services:
     networks:
       - schedule_platform_network
 
+  # SCHEDULE SERVICE
   schedule-service:
     build:
       context: ./services/schedule_service
       dockerfile: Dockerfile
     container_name: schedule_service
+    restart: always
     environment:
       # Database
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: schedule_service_db
-      DATABASE_USER: schedule_user
-      DATABASE_PASSWORD: schedule_password
-      DATABASE_URL: ${SCHEDULE_DATABASE_URL}
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/schedule_service_db
       
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_URL: redis://redis:6379/2
+      REDIS_URL: redis://redis:6379/1
       
       # App settings
       APP_NAME: Schedule Service
       APP_VERSION: 1.0.0
       DEBUG: ${DEBUG:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      HOST: 0.0.0.0
+      PORT: 8001
       
       # Microservices integration
       AUTH_SERVICE_URL: http://auth-service:8000
       PROFILE_SERVICE_URL: http://profile-service:8002
-      AUTH_SERVICE_TIMEOUT: 30
+      AUTH_SERVICE_INTERNAL_KEY: ${INTERNAL_API_KEY}
       
       # Security
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
@@ -251,9 +272,99 @@ services:
         condition: service_healthy
       auth-service:
         condition: service_healthy
-    restart: unless-stopped
+    # ✅ АВТОМАТИЧЕСКИЕ МИГРАЦИИ
+    command: >
+      sh -c "
+        echo '🔄 Applying Schedule Service migrations...' &&
+        alembic upgrade head &&
+        echo '✅ Migrations applied, starting Schedule Service...' &&
+        python run_server.py
+      "
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8001/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - schedule_platform_network
+
+  # ADMIN SERVICE
+  admin-service:
+    build:
+      context: ./services/admin_service
+      dockerfile: Dockerfile
+    container_name: admin_service
+    restart: always
+    environment:
+      # Database (Admin Service own DB)
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: admin_service_db
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/admin_service_db
+      
+      # Auth Service Database (READ-ONLY)
+      AUTH_DB_HOST: postgres
+      AUTH_DB_PORT: 5432
+      AUTH_DB_NAME: auth_service_db
+      AUTH_DB_USER: postgres
+      AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      AUTH_DB_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/auth_service_db
+      
+      # Redis (DB 3 для Admin Service)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 3
+      REDIS_URL: redis://redis:6379/3
+      
+      # App settings
+      APP_NAME: Admin Service
+      APP_VERSION: 1.0.0
+      DEBUG: ${DEBUG:-true}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      
+      # Security (ДОЛЖНЫ СОВПАДАТЬ с Auth Service!)
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: HS256
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      
+      # External Services URLs
+      AUTH_SERVICE_URL: http://auth-service:8000
+      PROFILE_SERVICE_URL: http://profile-service:8002
+      SCHEDULE_SERVICE_URL: http://schedule-service:8001
+      
+      # Cache TTL
+      CACHE_USER_TTL: 300
+      CACHE_STUDIO_TTL: 600
+      CACHE_CLASSROOM_TTL: 600
+      
+      # CORS
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:8080","http://localhost:5173"]}
+      ALLOW_CREDENTIALS: true
+      
+      # Logging
+      LOG_LEVEL: INFO
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    # ✅ АВТОМАТИЧЕСКИЕ МИГРАЦИИ
+    command: >
+      sh -c "
+        echo '🔄 Applying Admin Service migrations...' &&
+        alembic upgrade head &&
+        echo '✅ Migrations applied, starting Admin Service...' &&
+        python run_server.py
+      "
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8003/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 5

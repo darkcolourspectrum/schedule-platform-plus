@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Boolean, ForeignKey, DateTime, Text
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, Text, Integer
 from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 
@@ -7,7 +7,6 @@ from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.role import Role
-    from app.models.studio import Studio
     from app.models.refresh_token import RefreshToken
 
 
@@ -46,15 +45,16 @@ class User(Base, TimestampMixin):
     
     # Foreign Keys
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
-    studio_id: Mapped[Optional[int]] = mapped_column(ForeignKey("studios.id"), nullable=True)
+    studio_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Ссылка на студию (без FK constraint)
     
-    # Relationships - используем строки вместо классов для избежания циклических импортов
+    # Relationships
     role: Mapped["Role"] = relationship("Role", back_populates="users", lazy="select")
-    studio: Mapped[Optional["Studio"]] = relationship("Studio", back_populates="users", lazy="select")
+    # studio relationship УДАЛЁН - Studio модель перенесена в Admin Service
+    # studio_id остаётся как обычное поле для хранения связи
     refresh_tokens: Mapped[List["RefreshToken"]] = relationship(
         "RefreshToken", 
         back_populates="user",
-        cascade="all, delete-orphan",  # Это должно работать для cascade delete
+        cascade="all, delete-orphan",
         lazy="select"
     )
     

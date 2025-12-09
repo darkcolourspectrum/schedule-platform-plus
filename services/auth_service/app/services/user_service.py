@@ -21,7 +21,7 @@ class UserService:
         
         user = await self.user_repo.get_by_id(
             user_id, 
-            relationships=["role", "studio"]
+            relationships=["role"]  # УБРАЛ "studio"
         )
         
         if not user:
@@ -48,7 +48,7 @@ class UserService:
         users = await self.user_repo.get_all(
             limit=limit,
             offset=offset,
-            relationships=["role", "studio"],
+            relationships=["role"],  # УБРАЛ "studio"
             **filters
         )
         
@@ -63,7 +63,7 @@ class UserService:
                 first_name=user.first_name,
                 last_name=user.last_name,
                 role=user.role.name,
-                studio_name=user.studio.name if user.studio else None,
+                studio_name=None,  # Studio больше нет - всегда None
                 is_active=user.is_active,
                 created_at=user.created_at,
                 last_login=user.last_login
@@ -87,34 +87,61 @@ class UserService:
             
             if not update_dict:
                 logger.info(f"Нет данных для обновления пользователя {user_id}, возвращаем существующего")
-                # Если нет данных для обновления, возвращаем существующего пользователя
-                return await self.get_user_by_id(user_id)
+                user = await self.user_repo.get_by_id(user_id, relationships=["role"])
+                if not user:
+                    raise UserNotFoundException()
+                return user
             
-            logger.info(f"Обновляем пользователя {user_id} с данными: {update_dict}")
-            
-            # Получаем пользователя до обновления
-            existing_user = await self.get_user_by_id(user_id)
-            logger.info(f"Существующие данные пользователя {user_id}: bio='{existing_user.bio}'")
-            
+            logger.info(f"Обновление пользователя {user_id} с данными: {update_dict}")
             updated_user = await self.user_repo.update(user_id, **update_dict)
             
             if not updated_user:
-                logger.error(f"update() вернул None для пользователя {user_id}")
                 raise UserNotFoundException()
             
-            await self.db.close()
-
-            # Загружаем обновленного пользователя со связями
-            result_user = await self.get_user_by_id(user_id)
-            logger.info(f"Результат обновления пользователя {user_id}: bio='{result_user.bio}'")
+            # Загружаем обновленного пользователя с relationships
+            user = await self.user_repo.get_by_id(user_id, relationships=["role"])
             
-            logger.info(f"Профиль пользователя {user_id} успешно обновлен")
-            return result_user
+            logger.info(f"Пользователь {user_id} успешно обновлен")
+            return user
             
         except UserNotFoundException:
-            logger.error(f"Пользователь {user_id} не найден")
             raise
         except Exception as e:
-            logger.error(f"Ошибка при обновлении профиля пользователя {user_id}: {str(e)}")
-            logger.exception("Детальная ошибка:")
+            logger.error(f"Ошибка обновления профиля пользователя {user_id}: {e}", exc_info=True)
             raise
+    
+    async def change_user_role(self, user_id: int, new_role_id: int) -> User:
+        """Изменение роли пользователя"""
+        updated_user = await self.user_repo.update(user_id, role_id=new_role_id)
+        
+        if not updated_user:
+            raise UserNotFoundException()
+        
+        return updated_user
+    
+    async def assign_user_to_studio(self, user_id: int, studio_id: int) -> User:
+        """Привязка пользователя к студии"""
+        updated_user = await self.user_repo.update(user_id, studio_id=studio_id)
+        
+        if not updated_user:
+            raise UserNotFoundException()
+        
+        return updated_user
+    
+    async def activate_user(self, user_id: int) -> User:
+        """Активация пользователя"""
+        updated_user = await self.user_repo.update(user_id, is_active=True)
+        
+        if not updated_user:
+            raise UserNotFoundException()
+        
+        return updated_user
+    
+    async def deactivate_user(self, user_id: int) -> User:
+        """Деактивация пользователя"""
+        updated_user = await self.user_repo.update(user_id, is_active=False)
+        
+        if not updated_user:
+            raise UserNotFoundException()
+        
+        return updated_user

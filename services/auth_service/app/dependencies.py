@@ -1,3 +1,4 @@
+"""Dependencies для Auth Service"""
 from typing import Optional
 from fastapi import Depends, HTTPException, Request, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -6,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import get_async_session
 from app.services.auth_service import AuthService
 from app.services.user_service import UserService
-from app.services.studio_service import StudioService
+from app.repositories.user_repository import UserRepository
+from app.repositories.role_repository import RoleRepository
 from app.core.security import TokenPayload
 from app.core.exceptions import (
     InvalidTokenException,
@@ -14,33 +16,48 @@ from app.core.exceptions import (
     PermissionDeniedException
 )
 from app.models.user import User
-from app.models.role import RoleType
 from app.config import settings
 
 security = HTTPBearer(auto_error=False)
 
 
-async def get_auth_service(db: AsyncSession = Depends(get_async_session)) -> AuthService:
+# Service dependencies
+
+async def get_user_repository(
+    db: AsyncSession = Depends(get_async_session)
+) -> UserRepository:
+    """Dependency для получения UserRepository"""
+    return UserRepository(db)
+
+
+async def get_role_repository(
+    db: AsyncSession = Depends(get_async_session)
+) -> RoleRepository:
+    """Dependency для получения RoleRepository"""
+    return RoleRepository(db)
+
+
+async def get_auth_service(
+    db: AsyncSession = Depends(get_async_session)
+) -> AuthService:
     """Dependency для получения AuthService"""
     return AuthService(db)
 
 
-async def get_user_service(db: AsyncSession = Depends(get_async_session)) -> UserService:
+async def get_user_service(
+    db: AsyncSession = Depends(get_async_session)
+) -> UserService:
     """Dependency для получения UserService"""
     return UserService(db)
 
 
-async def get_studio_service(db: AsyncSession = Depends(get_async_session)) -> StudioService:
-    """Dependency для получения StudioService"""
-    return StudioService(db)
-
+# Auth dependencies
 
 async def verify_internal_api_key(
     x_internal_api_key: Optional[str] = Header(None)
 ) -> bool:
     """
-    НОВЫЙ: Dependency для проверки внутреннего API ключа
-    Используется для защиты эндпоинтов от внешних запросов
+    Проверка Internal API Key для межсервисного взаимодействия
     
     Args:
         x_internal_api_key: Ключ из заголовка X-Internal-API-Key
@@ -49,7 +66,7 @@ async def verify_internal_api_key(
         True если ключ валиден
         
     Raises:
-        HTTPException: Если ключ невалиден или отсутствует
+        HTTPException: Если ключ отсутствует или невалиден
     """
     if not x_internal_api_key:
         raise HTTPException(

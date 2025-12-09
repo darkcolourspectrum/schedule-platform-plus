@@ -44,6 +44,18 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO schedule_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO schedule_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO schedule_user;
 
+-- Создаём БД для Admin Service
+CREATE DATABASE admin_service_db OWNER postgres;
+GRANT ALL PRIVILEGES ON DATABASE admin_service_db TO postgres;
+
+-- Подключаемся к admin_service_db и даём права
+\connect admin_service_db;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres;
+
 -- Возвращаемся к postgres БД
 \connect postgres;
 
