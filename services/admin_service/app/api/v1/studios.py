@@ -8,7 +8,7 @@ from app.dependencies import get_studio_service, get_current_admin
 
 router = APIRouter(prefix="/studios", tags=["Studios"])
 
-@router.get("/", response_model=List[StudioResponse])
+@router.get("", response_model=List[StudioResponse])
 async def get_studios(
     include_inactive: bool = False,
     admin: dict = Depends(get_current_admin),

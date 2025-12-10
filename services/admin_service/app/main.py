@@ -62,6 +62,7 @@ app = FastAPI(
     version=settings.app_version,
     description="Administrative panel and CRM for Schedule Platform Plus",
     lifespan=lifespan,
+    redirect_slashes=False,
     docs_url="/docs" if settings.debug else None,
     redoc_url="/redoc" if settings.debug else None
 )

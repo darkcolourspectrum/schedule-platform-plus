@@ -251,7 +251,7 @@ async def get_current_user_info(
         full_name=current_user.full_name,
         role=current_user.role.name,
         studio_id=current_user.studio_id,
-        studio_name=current_user.studio.name if current_user.studio else None,
+        studio_name=None,  # Studio data now managed by admin_service
         is_admin=current_user.is_admin,
         is_teacher=current_user.is_teacher,
         is_student=current_user.is_student,

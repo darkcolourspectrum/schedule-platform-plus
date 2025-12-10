@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     auth_service_url: str = "http://auth-service:8000"
     profile_service_url: str = "http://profile-service:8002"
     schedule_service_url: str = "http://schedule-service:8001"
+    admin_service_url: str = "http://admin-service:8003"
     
     @property
     def cors_origins_list(self) -> List[str]:
