@@ -1,11 +1,11 @@
-"""User Management API endpoints"""
+"""User Management API endpoints - ПРАВИЛЬНАЯ версия"""
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_admin
 from app.services.user_management_service import UserManagementService
 from app.schemas.user import (
-    UserResponse,
+    UserDetailResponse,  # ← Используем полную схему
     UserUpdateRequest,
     UserRoleUpdateRequest,
     UserStudioAssignRequest
@@ -15,7 +15,7 @@ from app.dependencies import get_user_management_service
 router = APIRouter(prefix="/user-management", tags=["User Management"])
 
 
-@router.get("", response_model=List[UserResponse])
+@router.get("", response_model=List[UserDetailResponse])  # ← ПРАВИЛЬНАЯ схема
 async def get_all_users(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -35,7 +35,7 @@ async def get_all_users(
     )
 
 
-@router.put("/{user_id}/role", response_model=dict)
+@router.put("/{user_id}/role")
 async def update_user_role(
     user_id: int,
     request: UserRoleUpdateRequest,
@@ -50,7 +50,7 @@ async def update_user_role(
     }
 
 
-@router.put("/{user_id}/studio", response_model=dict)
+@router.put("/{user_id}/studio")
 async def assign_user_to_studio(
     user_id: int,
     request: UserStudioAssignRequest,
@@ -65,7 +65,7 @@ async def assign_user_to_studio(
     }
 
 
-@router.post("/{user_id}/activate", response_model=dict)
+@router.post("/{user_id}/activate")
 async def activate_user(
     user_id: int,
     current_user: dict = Depends(get_current_admin),
@@ -79,7 +79,7 @@ async def activate_user(
     }
 
 
-@router.post("/{user_id}/deactivate", response_model=dict)
+@router.post("/{user_id}/deactivate")
 async def deactivate_user(
     user_id: int,
     current_user: dict = Depends(get_current_admin),

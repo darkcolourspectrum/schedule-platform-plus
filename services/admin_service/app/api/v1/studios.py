@@ -30,7 +30,7 @@ async def get_studio(
         raise HTTPException(status_code=404, detail="Studio not found")
     return studio
 
-@router.post("/", response_model=StudioResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=StudioResponse, status_code=status.HTTP_201_CREATED)
 async def create_studio(
     data: StudioCreate,
     admin: dict = Depends(get_current_admin),
