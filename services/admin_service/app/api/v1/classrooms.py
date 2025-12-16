@@ -8,14 +8,6 @@ from app.dependencies import get_classroom_service, get_current_admin
 
 router = APIRouter(prefix="/classrooms", tags=["Classrooms"])
 
-@router.get("/studios/{studio_id}/classrooms", response_model=List[ClassroomResponse])
-async def get_studio_classrooms(
-    studio_id: int,
-    admin: dict = Depends(get_current_admin),
-    classroom_service: ClassroomService = Depends(get_classroom_service)
-):
-    """Get all classrooms in studio"""
-    return await classroom_service.get_studio_classrooms(studio_id)
 
 @router.get("/{classroom_id}", response_model=ClassroomResponse)
 async def get_classroom(
@@ -29,16 +21,6 @@ async def get_classroom(
         raise HTTPException(status_code=404, detail="Classroom not found")
     return classroom
 
-@router.post("/studios/{studio_id}/classrooms", response_model=ClassroomResponse, status_code=status.HTTP_201_CREATED)
-async def create_classroom(
-    studio_id: int,
-    data: ClassroomCreate,
-    admin: dict = Depends(get_current_admin),
-    classroom_service: ClassroomService = Depends(get_classroom_service)
-):
-    """Create new classroom in studio"""
-    classroom = await classroom_service.create_classroom(studio_id, **data.model_dump())
-    return classroom
 
 @router.put("/{classroom_id}", response_model=ClassroomResponse)
 async def update_classroom(

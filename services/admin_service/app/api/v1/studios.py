@@ -5,6 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.schemas.studio import StudioCreate, StudioUpdate, StudioResponse
 from app.services.studio_service import StudioService
 from app.dependencies import get_studio_service, get_current_admin
+from app.schemas.classroom import ClassroomCreate, ClassroomUpdate, ClassroomResponse
+from app.services.classroom_service import ClassroomService
+from app.dependencies import get_classroom_service
 
 router = APIRouter(prefix="/studios", tags=["Studios"])
 
@@ -64,3 +67,25 @@ async def delete_studio(
     deleted = await studio_service.delete_studio(studio_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Studio not found")
+    
+# ==================== CLASSROOMS ====================
+
+@router.get("/{studio_id}/classrooms", response_model=List[ClassroomResponse])
+async def get_studio_classrooms(
+    studio_id: int,
+    admin: dict = Depends(get_current_admin),
+    classroom_service: ClassroomService = Depends(get_classroom_service)
+):
+    """Get all classrooms in studio"""
+    return await classroom_service.get_studio_classrooms(studio_id)
+
+@router.post("/{studio_id}/classrooms", response_model=ClassroomResponse, status_code=status.HTTP_201_CREATED)
+async def create_classroom(
+    studio_id: int,
+    data: ClassroomCreate,
+    admin: dict = Depends(get_current_admin),
+    classroom_service: ClassroomService = Depends(get_classroom_service)
+):
+    """Create new classroom in studio"""
+    classroom = await classroom_service.create_classroom(studio_id, **data.model_dump())
+    return classroom
