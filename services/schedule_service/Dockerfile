@@ -1,32 +1,33 @@
+# Dockerfile для Schedule Service
 FROM python:3.11-slim
 
-# Устанавливаем системные зависимости
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Создаем рабочую директорию
+# Рабочая директория
 WORKDIR /app
 
-# Копируем requirements.txt
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копируем requirements
 COPY requirements.txt .
 
 # Устанавливаем Python зависимости
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем исходный код
+# Копируем код приложения
 COPY . .
 
-# Создаем non-root пользователя
-RUN adduser --disabled-password --gecos '' appuser && \
-    chown -R appuser:appuser /app
+# Создаём директорию для логов
+RUN mkdir -p /app/logs
 
-# Переключаемся на non-root пользователя
-USER appuser
-
-# Открываем порт
+# Экспортируем порт
 EXPOSE 8001
 
-# Команда запуска
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8001/health', timeout=5)"
+
+# Команда запуска (миграции будут применяться через docker-compose)
 CMD ["python", "run_server.py"]

@@ -1,129 +1,88 @@
-from fastapi import HTTPException, status
-from typing import Optional, Dict, Any
+"""
+Custom exceptions for Schedule Service
+"""
+
+from typing import Optional
 
 
-class ScheduleException(HTTPException):
+class ScheduleServiceException(Exception):
     """Базовое исключение для Schedule Service"""
-    
-    def __init__(
-        self,
-        status_code: int,
-        detail: str,
-        headers: Optional[Dict[str, Any]] = None
-    ):
-        super().__init__(status_code=status_code, detail=detail, headers=headers)
+    def __init__(self, message: str, details: Optional[str] = None):
+        self.message = message
+        self.details = details
+        super().__init__(self.message)
 
 
-class StudioNotFoundException(ScheduleException):
+class RecurringPatternNotFoundException(ScheduleServiceException):
+    """Шаблон повторения не найден"""
+    def __init__(self, pattern_id: int):
+        super().__init__(
+            message=f"Recurring pattern with id {pattern_id} not found"
+        )
+
+
+class LessonNotFoundException(ScheduleServiceException):
+    """Занятие не найдено"""
+    def __init__(self, lesson_id: int):
+        super().__init__(
+            message=f"Lesson with id {lesson_id} not found"
+        )
+
+
+class ClassroomConflictException(ScheduleServiceException):
+    """Конфликт кабинета"""
+    def __init__(self, classroom_id: int, lesson_date: str, time: str):
+        super().__init__(
+            message=f"Classroom {classroom_id} is already booked on {lesson_date} at {time}",
+            details="Another lesson is scheduled in this classroom at the same time"
+        )
+
+
+class InvalidTimeRangeException(ScheduleServiceException):
+    """Невалидный временной диапазон"""
+    def __init__(self, message: str):
+        super().__init__(message=message)
+
+
+class InvalidLessonStatusException(ScheduleServiceException):
+    """Невалидный статус занятия"""
+    def __init__(self, current_status: str, new_status: str):
+        super().__init__(
+            message=f"Cannot change lesson status from '{current_status}' to '{new_status}'"
+        )
+
+
+class PermissionDeniedException(ScheduleServiceException):
+    """Недостаточно прав"""
+    def __init__(self, message: str = "Permission denied"):
+        super().__init__(message=message)
+
+
+class StudioNotFoundException(ScheduleServiceException):
     """Студия не найдена"""
-    
-    def __init__(self, studio_id: Optional[int] = None):
-        detail = "Studio not found"
-        if studio_id:
-            detail += f" (ID: {studio_id})"
+    def __init__(self, studio_id: int):
         super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=detail
+            message=f"Studio with id {studio_id} not found"
         )
 
 
-class RoomNotFoundException(ScheduleException):
+class ClassroomNotFoundException(ScheduleServiceException):
     """Кабинет не найден"""
-    
-    def __init__(self, room_id: Optional[int] = None):
-        detail = "Room not found"
-        if room_id:
-            detail += f" (ID: {room_id})"
+    def __init__(self, classroom_id: int):
         super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=detail
+            message=f"Classroom with id {classroom_id} not found"
         )
 
 
-class LessonNotFoundException(ScheduleException):
-    """Урок не найден"""
-    
-    def __init__(self, lesson_id: Optional[int] = None):
-        detail = "Lesson not found"
-        if lesson_id:
-            detail += f" (ID: {lesson_id})"
+class UserNotFoundException(ScheduleServiceException):
+    """Пользователь не найден"""
+    def __init__(self, user_id: int):
         super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=detail
+            message=f"User with id {user_id} not found"
         )
 
 
-class TimeSlotConflictException(ScheduleException):
-    """Конфликт времени - слот уже занят"""
-    
-    def __init__(self, room_name: Optional[str] = None, time_info: Optional[str] = None):
-        detail = "Time slot is already occupied"
-        if room_name and time_info:
-            detail += f" in room '{room_name}' at {time_info}"
-        super().__init__(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=detail
-        )
-
-
-class InvalidTimeSlotException(ScheduleException):
-    """Некорректный временной слот"""
-    
-    def __init__(self, reason: str = "Invalid time slot"):
-        super().__init__(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=reason
-        )
-
-
-class UnauthorizedStudioAccessException(ScheduleException):
-    """Нет доступа к студии"""
-    
-    def __init__(self, studio_name: Optional[str] = None):
-        detail = "Access denied to studio"
-        if studio_name:
-            detail += f" '{studio_name}'"
-        super().__init__(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=detail
-        )
-
-
-class LessonPermissionDeniedException(ScheduleException):
-    """Нет прав для редактирования урока"""
-    
-    def __init__(self):
-        super().__init__(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: you can only edit your own lessons"
-        )
-
-
-class InvalidScheduleRangeException(ScheduleException):
-    """Некорректный диапазон расписания"""
-    
-    def __init__(self, max_weeks: int):
-        super().__init__(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Schedule range is limited to {max_weeks} weeks"
-        )
-
-
-class AuthServiceUnavailableException(ScheduleException):
-    """Auth Service недоступен"""
-    
-    def __init__(self):
-        super().__init__(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Authentication service is temporarily unavailable"
-        )
-
-
-class ValidationException(ScheduleException):
-    """Ошибка валидации данных"""
-    
-    def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=detail
-        )
+class GenerationException(ScheduleServiceException):
+    """Ошибка генерации занятий"""
+    def __init__(self, message: str, details: Optional[str] = None):
+        super().__init__(message=message, details=details)

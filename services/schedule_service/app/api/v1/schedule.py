@@ -1,341 +1,268 @@
-from typing import List, Optional
-from datetime import date, datetime, timedelta
-from fastapi import APIRouter, Depends, Query, Path, HTTPException, status
-from pydantic import BaseModel, Field
+"""
+API endpoints для Schedule (расписание)
+"""
 
-from app.dependencies import (
-    get_current_teacher,
-    get_current_student,
-    get_current_admin,
-    get_schedule_service,
-    CurrentUser
+import logging
+from datetime import date, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+
+from app.schemas.schedule import (
+    StudioScheduleResponse,
+    TeacherScheduleResponse,
+    StudentScheduleResponse,
+    GenerateLessonsRequest,
+    GenerateLessonsResponse,
+    ConflictCheckRequest,
+    ConflictCheckResponse
 )
 from app.services.schedule_service import ScheduleService
-from app.models.lesson import LessonType
-from app.core.exceptions import ValidationException
+from app.services.lesson_generator_service import LessonGeneratorService
+from app.services.lesson_service import LessonService
+from app.dependencies import (
+    get_current_user,
+    get_current_admin,
+    get_schedule_service,
+    get_generator_service,
+    get_lesson_service,
+    check_studio_access,
+    check_teacher_access,
+    check_student_access
+)
+from app.core.security import extract_role_name
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/schedule", tags=["Schedule"])
 
 
-# === Pydantic схемы для запросов и ответов ===
-
-class TimeSlotReservationRequest(BaseModel):
-    """Запрос на резервирование временного слота"""
-    slot_id: int = Field(..., description="ID временного слота")
-
-
-class LessonCreateRequest(BaseModel):
-    """Запрос на создание урока в слоте"""
-    slot_id: int = Field(..., description="ID забронированного слота")
-    title: str = Field(..., min_length=1, max_length=200, description="Название урока")
-    lesson_type: LessonType = Field(LessonType.INDIVIDUAL, description="Тип урока")
-    description: Optional[str] = Field(None, max_length=1000, description="Описание урока")
-    max_students: int = Field(1, ge=1, le=10, description="Максимальное количество учеников")
-
-
-class StudentEnrollmentRequest(BaseModel):
-    """Запрос на запись ученика на урок"""
-    student_id: int = Field(..., description="ID ученика из Auth Service")
-    student_name: str = Field(..., min_length=1, max_length=200, description="Имя ученика")
-    student_email: str = Field(..., description="Email ученика")
-    student_phone: Optional[str] = Field(None, description="Телефон ученика")
-    student_level: str = Field("beginner", description="Уровень ученика")
-
-
-class LessonCancellationRequest(BaseModel):
-    """Запрос на отмену урока"""
-    reason: str = Field(..., min_length=1, max_length=500, description="Причина отмены")
-
-
-# === Endpoints для преподавателей ===
-
 @router.get(
-    "/teacher/my-schedule",
-    summary="Расписание преподавателя",
-    description="Получение расписания текущего преподавателя"
+    "/studios/{studio_id}",
+    response_model=StudioScheduleResponse,
+    summary="Получить расписание студии"
 )
-async def get_teacher_schedule(
-    start_date: date = Query(..., description="Дата начала периода"),
-    end_date: date = Query(..., description="Дата окончания периода"),
-    current_user: CurrentUser = Depends(get_current_teacher),
+async def get_studio_schedule(
+    studio_id: int,
+    from_date: date = Query(..., description="Начальная дата"),
+    to_date: date = Query(..., description="Конечная дата"),
+    current_user: dict = Depends(get_current_user),
     schedule_service: ScheduleService = Depends(get_schedule_service)
 ):
-    """Получение расписания преподавателя"""
+    """
+    Получить расписание студии за период
     
-    # Ограничиваем диапазон запроса (максимум 4 недели)
-    if (end_date - start_date).days > 28:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Date range cannot exceed 4 weeks"
-        )
-    
-    return await schedule_service.get_teacher_schedule(
-        teacher_id=current_user.id,
-        start_date=start_date,
-        end_date=end_date
-    )
-
-
-@router.post(
-    "/teacher/reserve-slot",
-    summary="Резервирование временного слота",
-    description="Бронирование слота преподавателем для последующего создания урока"
-)
-async def reserve_time_slot(
-    request: TimeSlotReservationRequest,
-    current_user: CurrentUser = Depends(get_current_teacher),
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Резервирование слота преподавателем"""
-    
-    reserved_slot = await schedule_service.reserve_time_slot(
-        teacher_id=current_user.id,
-        teacher_name=current_user.full_name,
-        teacher_email=current_user.email,
-        slot_id=request.slot_id
-    )
-    
-    return {
-        "message": "Time slot reserved successfully",
-        "slot": {
-            "id": reserved_slot.id,
-            "date": reserved_slot.date.isoformat(),
-            "time_range": reserved_slot.time_range_str,
-            "studio_name": reserved_slot.studio.name,
-            "room_name": reserved_slot.room.name,
-            "status": reserved_slot.status.value
-        }
-    }
-
-
-@router.delete(
-    "/teacher/cancel-reservation/{slot_id}",
-    summary="Отмена резервирования слота",
-    description="Снятие брони со временного слота"
-)
-async def cancel_slot_reservation(
-    slot_id: int = Path(..., description="ID временного слота"),
-    current_user: CurrentUser = Depends(get_current_teacher),
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Отмена резервирования слота"""
-    
-    success = await schedule_service.cancel_time_slot_reservation(
-        teacher_id=current_user.id,
-        slot_id=slot_id
-    )
-    
-    if success:
-        return {"message": "Slot reservation cancelled successfully"}
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot cancel reservation at this time"
-        )
-
-
-@router.post(
-    "/teacher/create-lesson",
-    summary="Создание урока в слоте",
-    description="Создание урока в забронированном временном слоте"
-)
-async def create_lesson(
-    request: LessonCreateRequest,
-    current_user: CurrentUser = Depends(get_current_teacher),
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Создание урока в забронированном слоте"""
-    
-    lesson = await schedule_service.create_lesson_in_slot(
-        teacher_id=current_user.id,
-        teacher_name=current_user.full_name,
-        teacher_email=current_user.email,
-        slot_id=request.slot_id,
-        title=request.title,
-        lesson_type=request.lesson_type,
-        description=request.description,
-        max_students=request.max_students
-    )
-    
-    return {
-        "message": "Lesson created successfully",
-        "lesson": {
-            "id": lesson.id,
-            "title": lesson.title,
-            "type": lesson.lesson_type.value,
-            "date": lesson.date_str,
-            "time_range": lesson.time_range_str,
-            "studio_name": lesson.studio_name,
-            "room_name": lesson.room_name,
-            "max_students": lesson.max_students,
-            "status": lesson.status.value
-        }
-    }
-
-
-@router.post(
-    "/teacher/lessons/{lesson_id}/enroll-student",
-    summary="Запись ученика на урок",
-    description="Добавление ученика к уроку преподавателем"
-)
-async def enroll_student_to_lesson(
-    lesson_id: int = Path(..., description="ID урока"),
-    request: StudentEnrollmentRequest = ...,
-    current_user: CurrentUser = Depends(get_current_teacher),
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Запись ученика на урок"""
-    
-    success = await schedule_service.enroll_student_to_lesson(
-        lesson_id=lesson_id,
-        teacher_id=current_user.id,
-        student_id=request.student_id,
-        student_name=request.student_name,
-        student_email=request.student_email,
-        student_phone=request.student_phone,
-        student_level=request.student_level
-    )
-    
-    if success:
-        return {"message": "Student enrolled successfully"}
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot enroll student to this lesson"
-        )
-
-
-@router.delete(
-    "/teacher/lessons/{lesson_id}/students/{student_id}",
-    summary="Удаление ученика с урока",
-    description="Снятие ученика с записи на урок"
-)
-async def remove_student_from_lesson(
-    lesson_id: int = Path(..., description="ID урока"),
-    student_id: int = Path(..., description="ID ученика"),
-    current_user: CurrentUser = Depends(get_current_teacher),
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Удаление ученика с урока"""
-    
-    success = await schedule_service.remove_student_from_lesson(
-        lesson_id=lesson_id,
-        teacher_id=current_user.id,
-        student_id=student_id
-    )
-    
-    if success:
-        return {"message": "Student removed from lesson"}
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot remove student from lesson"
-        )
-
-
-# === Endpoints для учеников ===
-
-@router.get(
-    "/student/my-schedule",
-    summary="Расписание ученика",
-    description="Получение расписания текущего ученика"
-)
-async def get_student_schedule(
-    start_date: date = Query(..., description="Дата начала периода"),
-    end_date: date = Query(..., description="Дата окончания периода"),
-    current_user: CurrentUser = Depends(get_current_student),
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Получение расписания ученика"""
-    
-    # Ограничиваем диапазон (ученикам достаточно 2 недель)
-    if (end_date - start_date).days > 14:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Date range cannot exceed 2 weeks"
-        )
-    
-    return await schedule_service.get_student_schedule(
-        student_id=current_user.id,
-        start_date=start_date,
-        end_date=end_date
-    )
-
-
-@router.post(
-    "/student/lessons/{lesson_id}/cancel",
-    summary="Отмена урока учеником",
-    description="Снятие с записи на урок (или полная отмена при индивидуальном уроке)"
-)
-async def cancel_lesson_by_student(
-    lesson_id: int = Path(..., description="ID урока"),
-    request: LessonCancellationRequest = ...,
-    current_user: CurrentUser = Depends(get_current_student),
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Отмена урока учеником"""
-    
-    success = await schedule_service.cancel_lesson_by_student(
-        lesson_id=lesson_id,
-        student_id=current_user.id,
-        reason=request.reason
-    )
-    
-    if success:
-        return {"message": "Lesson cancelled successfully"}
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot cancel lesson at this time"
-        )
-
-
-# === Общие endpoints ===
-
-@router.get(
-    "/available-slots",
-    summary="Доступные слоты для бронирования",
-    description="Получение свободных временных слотов"
-)
-async def get_available_slots(
-    studio_id: int = Query(..., description="ID студии"),
-    start_date: date = Query(..., description="Дата начала поиска"),
-    end_date: date = Query(..., description="Дата окончания поиска"),
-    room_type: Optional[str] = Query(None, description="Тип кабинета"),
-    min_capacity: int = Query(1, ge=1, description="Минимальная вместимость"),
-    current_user: CurrentUser = Depends(get_current_teacher),  # Только преподаватели могут бронировать
-    schedule_service: ScheduleService = Depends(get_schedule_service)
-):
-    """Получение доступных слотов для бронирования"""
-    
+    Доступно: admin, teacher (своей студии)
+    """
     # Проверяем доступ к студии
-    if not current_user.has_studio_access(studio_id):
+    if not check_studio_access(current_user, studio_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this studio"
+            detail="You don't have access to this studio"
         )
     
-    # Ограничиваем поиск 2 неделями
-    if (end_date - start_date).days > 14:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Search period cannot exceed 2 weeks"
-        )
+    # Получаем расписание
+    lessons = await schedule_service.get_studio_schedule(studio_id, from_date, to_date)
     
-    available_slots = await schedule_service.get_available_slots_for_booking(
+    # TODO: Получить название студии из Admin Service
+    studio_name = f"Studio {studio_id}"
+    
+    return StudioScheduleResponse(
         studio_id=studio_id,
-        start_date=start_date,
-        end_date=end_date,
-        room_type=room_type,
-        min_capacity=min_capacity
+        studio_name=studio_name,
+        from_date=from_date,
+        to_date=to_date,
+        lessons=lessons,
+        total=len(lessons)
+    )
+
+
+@router.get(
+    "/teachers/{teacher_id}",
+    response_model=TeacherScheduleResponse,
+    summary="Получить расписание преподавателя"
+)
+async def get_teacher_schedule(
+    teacher_id: int,
+    from_date: date = Query(..., description="Начальная дата"),
+    to_date: date = Query(..., description="Конечная дата"),
+    current_user: dict = Depends(get_current_user),
+    schedule_service: ScheduleService = Depends(get_schedule_service)
+):
+    """
+    Получить расписание преподавателя за период
+    
+    Доступно: admin, teacher (свое расписание)
+    """
+    # Проверяем доступ
+    if not check_teacher_access(current_user, teacher_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this teacher's schedule"
+        )
+    
+    # Получаем расписание
+    lessons = await schedule_service.get_teacher_schedule(teacher_id, from_date, to_date)
+    
+    # TODO: Получить имя преподавателя
+    teacher_name = f"Teacher {teacher_id}"
+    
+    return TeacherScheduleResponse(
+        teacher_id=teacher_id,
+        teacher_name=teacher_name,
+        from_date=from_date,
+        to_date=to_date,
+        lessons=lessons,
+        total=len(lessons)
+    )
+
+
+@router.get(
+    "/students/{student_id}",
+    response_model=StudentScheduleResponse,
+    summary="Получить занятия ученика"
+)
+async def get_student_schedule(
+    student_id: int,
+    from_date: date = Query(..., description="Начальная дата"),
+    to_date: date = Query(..., description="Конечная дата"),
+    current_user: dict = Depends(get_current_user),
+    schedule_service: ScheduleService = Depends(get_schedule_service)
+):
+    """
+    Получить занятия ученика за период
+    
+    Доступно: admin, teacher (той же студии), student (свои занятия)
+    """
+    # Проверяем доступ
+    if not check_student_access(current_user, student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this student's schedule"
+        )
+    
+    # Получаем расписание
+    lessons = await schedule_service.get_student_schedule(student_id, from_date, to_date)
+    
+    # TODO: Получить имя ученика
+    student_name = f"Student {student_id}"
+    
+    return StudentScheduleResponse(
+        student_id=student_id,
+        student_name=student_name,
+        from_date=from_date,
+        to_date=to_date,
+        lessons=lessons,
+        total=len(lessons)
+    )
+
+
+@router.post(
+    "/generate",
+    response_model=GenerateLessonsResponse,
+    summary="Генерация занятий"
+)
+async def generate_lessons(
+    request: GenerateLessonsRequest,
+    current_user: dict = Depends(get_current_admin),
+    generator_service: LessonGeneratorService = Depends(get_generator_service)
+):
+    """
+    Ручная генерация занятий из шаблонов
+    
+    Доступно только админам
+    """
+    
+    until_date = request.until_date or (
+        date.today() + timedelta(weeks=settings.schedule_generation_weeks)
     )
     
-    return {
-        "studio_id": studio_id,
-        "period": {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat()
-        },
-        "total_slots": len(available_slots),
-        "available_slots": available_slots
-    }
+    if request.pattern_id:
+        # Генерация для конкретного шаблона
+        from app.dependencies import get_pattern_service
+        from app.repositories.recurring_pattern_repository import RecurringPatternRepository
+        from app.database.connection import get_schedule_db
+        
+        # Это упрощенный вариант, в production лучше через dependency
+        async for db in get_schedule_db():
+            pattern_repo = RecurringPatternRepository(db)
+            pattern = await pattern_repo.get_by_id(request.pattern_id)
+            
+            if not pattern:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Pattern {request.pattern_id} not found"
+                )
+            
+            generated, skipped, errors = await generator_service.generate_lessons_for_pattern(
+                pattern,
+                until_date
+            )
+            break
+    else:
+        # Генерация для всех шаблонов
+        generated, skipped, errors = await generator_service.generate_all_patterns(until_date)
+    
+    return GenerateLessonsResponse(
+        success=True,
+        generated_count=generated,
+        skipped_count=skipped,
+        errors=errors,
+        message=f"Generated {generated} lessons, skipped {skipped}"
+    )
+
+
+@router.post(
+    "/check-conflict",
+    response_model=ConflictCheckResponse,
+    summary="Проверка конфликта кабинета"
+)
+async def check_classroom_conflict(
+    request: ConflictCheckRequest,
+    current_user: dict = Depends(get_current_user),
+    lesson_service: LessonService = Depends(get_lesson_service)
+):
+    """
+    Проверить конфликт кабинета на определенную дату и время
+    
+    Полезно для валидации перед созданием занятия
+    """
+    
+    has_conflict = await lesson_service.check_classroom_conflict(
+        classroom_id=request.classroom_id,
+        lesson_date=request.lesson_date,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        exclude_lesson_id=request.exclude_lesson_id
+    )
+    
+    conflicting_lessons = []
+    
+    if has_conflict:
+        # Получаем конфликтующие занятия для деталей
+        from app.repositories.lesson_repository import LessonRepository
+        from app.database.connection import get_schedule_db
+        
+        async for db in get_schedule_db():
+            lesson_repo = LessonRepository(db)
+            lessons = await lesson_repo.get_by_classroom(
+                request.classroom_id,
+                request.lesson_date,
+                request.exclude_lesson_id
+            )
+            
+            for lesson in lessons:
+                # Проверяем пересечение
+                if (request.start_time < lesson.end_time and 
+                    request.end_time > lesson.start_time):
+                    conflicting_lessons.append({
+                        "lesson_id": lesson.id,
+                        "start_time": str(lesson.start_time),
+                        "end_time": str(lesson.end_time),
+                        "teacher_id": lesson.teacher_id
+                    })
+            break
+    
+    return ConflictCheckResponse(
+        has_conflict=has_conflict,
+        conflicting_lessons=conflicting_lessons
+    )

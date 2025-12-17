@@ -1,16 +1,19 @@
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import DateTime, func
+"""
+Base model for all SQLAlchemy models
+"""
+
 from datetime import datetime
-from typing import Optional
+from sqlalchemy import DateTime, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    """Базовая модель для всех таблиц"""
+    """Base class for all models"""
     pass
 
 
 class TimestampMixin:
-    """Миксин для добавления временных меток"""
+    """Mixin для автоматических timestamp полей"""
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -18,8 +21,9 @@ class TimestampMixin:
         nullable=False
     )
     
-    updated_at: Mapped[Optional[datetime]] = mapped_column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        server_default=func.now(),
         onupdate=func.now(),
-        nullable=True
+        nullable=False
     )

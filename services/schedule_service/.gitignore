@@ -1,9 +1,12 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
-*.class
+*$py.class
 *.so
 .Python
+env/
+venv/
+ENV/
 build/
 develop-eggs/
 dist/
@@ -16,81 +19,33 @@ parts/
 sdist/
 var/
 wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
-# Virtual environments
-venv/
-.venv/
-env/
-.env/
-ENV/
-env.bak/
-venv.bak/
-
-# Environment files
-.env
-.env.local
-.env.production
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.coverage.*
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-
-# Database
-*.db
-*.sqlite3
-*.db-journal
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
 # Alembic
-migrations/versions/*.py
-!migrations/versions/__init__.py
-
-# Redis dump
-dump.rdb
-
-# Temporary files
-*.tmp
-*.temp
-temp/
-tmp/
+migrations/versions/*.pyc

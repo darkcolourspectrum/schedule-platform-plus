@@ -17,7 +17,10 @@ from app.config import settings
 from app.models.base import Base
 
 # Import all models for autodiscovery
-from app.models import *
+from app.models.recurring_pattern import RecurringPattern
+from app.models.lesson import Lesson
+from app.models.lesson_student import LessonStudent, RecurringPatternStudent
+from app.models.auth_models import User, Role
 
 # Alembic Config
 config = context.config

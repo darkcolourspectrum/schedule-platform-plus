@@ -1,30 +1,20 @@
 """
-Модели данных для Schedule Service
-Импорт всех моделей для правильной инициализации SQLAlchemy
+Models package initialization
 """
 
-# Импортируем модели в правильном порядке (базовые -> зависимые)
 from app.models.base import Base, TimestampMixin
-from app.models.studio import Studio
-from app.models.room import Room, RoomType
-from app.models.time_slot import TimeSlot, SlotStatus
-from app.models.lesson import Lesson, LessonStatus, LessonType
+from app.models.recurring_pattern import RecurringPattern
+from app.models.lesson import Lesson
+from app.models.lesson_student import LessonStudent, RecurringPatternStudent
+from app.models.auth_models import User, Role
 
-# Экспортируем все для использования в других модулях
 __all__ = [
-    # Базовые классы
     "Base",
     "TimestampMixin",
-    
-    # Основные модели
-    "Studio",
-    "Room",
-    "TimeSlot", 
+    "RecurringPattern",
     "Lesson",
-    
-    # Enums
-    "RoomType",
-    "SlotStatus",
-    "LessonStatus",
-    "LessonType"
+    "LessonStudent",
+    "RecurringPatternStudent",
+    "User",
+    "Role",
 ]

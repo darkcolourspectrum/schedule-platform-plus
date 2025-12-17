@@ -111,7 +111,7 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       
       # CORS
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:8080"]}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:8080","http://localhost:5173"]}
       ALLOW_CREDENTIALS: true
     ports:
       - "8000:8000"
@@ -186,7 +186,7 @@ services:
       AVATAR_UPLOAD_PATH: static/avatars
       
       # CORS
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:8080"]}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:8080","http://localhost:5173"]}
       ALLOW_CREDENTIALS: true
     ports:
       - "8002:8002"
@@ -216,7 +216,6 @@ services:
     networks:
       - schedule_platform_network
 
-  # SCHEDULE SERVICE
   schedule-service:
     build:
       context: ./services/schedule_service
@@ -224,20 +223,7 @@ services:
     container_name: schedule_service
     restart: always
     environment:
-      # Database
-      DATABASE_HOST: postgres
-      DATABASE_PORT: 5432
-      DATABASE_NAME: schedule_service_db
-      DATABASE_USER: postgres
-      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/schedule_service_db
-      
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_URL: redis://redis:6379/1
-      
-      # App settings
+      # Application Settings
       APP_NAME: Schedule Service
       APP_VERSION: 1.0.0
       DEBUG: ${DEBUG:-true}
@@ -245,24 +231,49 @@ services:
       HOST: 0.0.0.0
       PORT: 8001
       
-      # Microservices integration
-      AUTH_SERVICE_URL: http://auth-service:8000
-      PROFILE_SERVICE_URL: http://profile-service:8002
-      AUTH_SERVICE_INTERNAL_KEY: ${INTERNAL_API_KEY}
+      # Schedule Service Database (своя БД)
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: schedule_service_db
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/schedule_service_db
       
-      # Security
+      # Auth Service Database (READ-ONLY для User данных)
+      AUTH_DB_HOST: postgres
+      AUTH_DB_PORT: 5432
+      AUTH_DB_NAME: auth_service_db
+      AUTH_DB_USER: postgres
+      AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      AUTH_DB_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/auth_service_db
+      
+      # Redis (DB 4 для Schedule Service)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 4
+      REDIS_URL: redis://redis:6379/4
+      REDIS_CACHE_TTL: 3600
+      
+      # Security (ДОЛЖНЫ СОВПАДАТЬ с Auth Service!)
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       
-      # Schedule specific
-      DEFAULT_LESSON_DURATION_MINUTES: ${DEFAULT_LESSON_DURATION_MINUTES:-60}
-      MAX_ADVANCE_BOOKING_DAYS: ${MAX_ADVANCE_BOOKING_DAYS:-30}
-      MIN_ADVANCE_BOOKING_HOURS: ${MIN_ADVANCE_BOOKING_HOURS:-2}
-      BOOKING_WINDOW_WEEKS: ${BOOKING_WINDOW_WEEKS:-4}
-      
       # CORS
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:8080"]}
-      ALLOW_CREDENTIALS: true
+      CORS_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      CORS_ALLOW_CREDENTIALS: true
+      
+      # Admin Service (для получения данных о студиях/кабинетах)
+      ADMIN_SERVICE_URL: http://admin-service:8003
+      ADMIN_SERVICE_TIMEOUT: 10
+      
+      # Schedule Settings
+      SCHEDULE_GENERATION_WEEKS: 2
+      DEFAULT_LESSON_DURATION_MINUTES: 60
+      SCHEDULE_TIMEZONE: Asia/Tomsk
+      WORKING_HOURS_START: "09:00"
+      WORKING_HOURS_END: "20:00"
     ports:
       - "8001:8001"
     depends_on:
@@ -272,7 +283,6 @@ services:
         condition: service_healthy
       auth-service:
         condition: service_healthy
-    # ✅ АВТОМАТИЧЕСКИЕ МИГРАЦИИ
     command: >
       sh -c "
         echo '🔄 Applying Schedule Service migrations...' &&

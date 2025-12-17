@@ -1,181 +1,123 @@
+"""
+Pydantic schemas для Schedule (расписание)
+"""
+
+from typing import Optional, List, Dict, Any
+from datetime import date, time
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime, date, time
-from enum import Enum
-
-from app.models.lesson import LessonStatus, LessonType
-from app.models.time_slot import SlotStatus
-from app.models.room import RoomType
 
 
-# === Базовые схемы ===
-
-class StudioInfo(BaseModel):
-    """Информация о студии"""
-    id: int
-    name: str
-    working_hours: str
+class ScheduleFilters(BaseModel):
+    """Фильтры для получения расписания"""
     
-    class Config:
-        from_attributes = True
+    from_date: date = Field(..., description="Начальная дата")
+    to_date: date = Field(..., description="Конечная дата")
+    teacher_id: Optional[int] = Field(None, description="Фильтр по преподавателю")
+    classroom_id: Optional[int] = Field(None, description="Фильтр по кабинету")
+    status: Optional[str] = Field(None, description="Фильтр по статусу")
 
 
-class RoomInfo(BaseModel):
-    """Информация о кабинете"""
-    id: int
-    name: str
-    type: RoomType
-    capacity: int
-    equipment: str
+class ScheduleLessonItem(BaseModel):
+    """Элемент расписания (упрощенная информация)"""
     
-    class Config:
-        from_attributes = True
-
-
-class TimeSlotInfo(BaseModel):
-    """Информация о временном слоте"""
-    id: int
-    date: date
-    time_range: str
-    duration_minutes: int
-    status: SlotStatus
-    studio_name: str
-    room_name: str
-    has_lesson: bool = False
-    reserved_by: Optional[str] = None
+    lesson_id: int
+    lesson_date: date
+    start_time: time
+    end_time: time
+    status: str
     
-    class Config:
-        from_attributes = True
-
-
-class LessonInfo(BaseModel):
-    """Информация об уроке"""
-    id: int
-    title: str
-    type: LessonType
-    status: LessonStatus
-    date: str
-    time_range: str
-    teacher_name: str
-    studio_name: str
-    room_name: str
-    students_count: int
-    students_names: List[str]
-    is_group: bool
-    max_students: int
-    
-    class Config:
-        from_attributes = True
-
-
-class StudentInfo(BaseModel):
-    """Информация об ученике в уроке"""
-    id: int
-    name: str
-    email: str
-    phone: Optional[str] = None
-    level: str = "beginner"
-    enrolled_at: str
-
-
-# === Схемы расписания ===
-
-class ScheduleDay(BaseModel):
-    """Расписание на один день"""
-    date: str
-    slots: List[Dict[str, Any]] = []
-    lessons: List[Dict[str, Any]] = []
-
-
-class TeacherSchedule(BaseModel):
-    """Расписание преподавателя"""
     teacher_id: int
-    period: Dict[str, str]
-    schedule: List[ScheduleDay]
+    teacher_name: str
+    
+    classroom_id: Optional[int]
+    classroom_name: Optional[str]
+    
+    student_ids: List[int] = Field(default_factory=list)
+    student_names: List[str] = Field(default_factory=list)
+    
+    is_recurring: bool
+    notes: Optional[str] = None
 
 
-class StudentSchedule(BaseModel):
-    """Расписание ученика"""
-    student_id: int
-    period: Dict[str, str]
-    schedule: List[ScheduleDay]
+class DaySchedule(BaseModel):
+    """Расписание на один день"""
+    
+    date: date
+    lessons: List[ScheduleLessonItem] = Field(default_factory=list)
+    total_lessons: int = 0
 
 
-class StudioSchedule(BaseModel):
+class WeekSchedule(BaseModel):
+    """Расписание на неделю"""
+    
+    week_start: date
+    week_end: date
+    days: List[DaySchedule] = Field(default_factory=list)
+    total_lessons: int = 0
+
+
+class StudioScheduleResponse(BaseModel):
     """Расписание студии"""
-    studio: StudioInfo
-    date: str
-    rooms: List[Dict[str, Any]]
-
-
-class AvailableSlot(BaseModel):
-    """Доступный слот для бронирования"""
-    slot_id: int
-    date: str
-    time_range: str
-    duration_minutes: int
-    studio_name: str
-    room: RoomInfo
-
-
-class AvailableSlotsResponse(BaseModel):
-    """Ответ со списком доступных слотов"""
+    
     studio_id: int
-    period: Dict[str, str]
-    total_slots: int
-    available_slots: List[AvailableSlot]
+    studio_name: Optional[str] = None
+    from_date: date
+    to_date: date
+    lessons: List[ScheduleLessonItem] = Field(default_factory=list)
+    total: int = 0
 
 
-# === Схемы для статистики ===
-
-class LessonStatistics(BaseModel):
-    """Статистика по урокам"""
-    total_lessons: int
-    by_status: Dict[str, int]
-    by_type: Dict[str, int]
-    period: Dict[str, Optional[str]]
-
-
-class RoomUtilization(BaseModel):
-    """Загруженность кабинета"""
-    total_slots: int
-    booked_slots: int
-    reserved_slots: int
-    available_slots: int
-    utilization_percentage: float
+class TeacherScheduleResponse(BaseModel):
+    """Расписание преподавателя"""
+    
+    teacher_id: int
+    teacher_name: Optional[str] = None
+    from_date: date
+    to_date: date
+    lessons: List[ScheduleLessonItem] = Field(default_factory=list)
+    total: int = 0
 
 
-class StudioUtilization(BaseModel):
-    """Загруженность студии"""
-    studio_id: int
-    period: Dict[str, Any]
-    overall: Dict[str, Any]
-    by_room: Dict[str, RoomUtilization]
+class StudentScheduleResponse(BaseModel):
+    """Расписание ученика (его занятия)"""
+    
+    student_id: int
+    student_name: Optional[str] = None
+    from_date: date
+    to_date: date
+    lessons: List[ScheduleLessonItem] = Field(default_factory=list)
+    total: int = 0
 
 
-# === Ответы API ===
+class GenerateLessonsRequest(BaseModel):
+    """Запрос на генерацию занятий"""
+    
+    pattern_id: Optional[int] = Field(None, description="ID шаблона (если не указан - генерация для всех)")
+    until_date: Optional[date] = Field(None, description="До какой даты генерировать")
 
-class MessageResponse(BaseModel):
-    """Стандартный ответ с сообщением"""
+
+class GenerateLessonsResponse(BaseModel):
+    """Результат генерации занятий"""
+    
+    success: bool
+    generated_count: int
+    skipped_count: int = 0
+    errors: List[str] = Field(default_factory=list)
     message: str
 
 
-class SlotReservationResponse(BaseModel):
-    """Ответ на резервирование слота"""
-    message: str
-    slot: TimeSlotInfo
+class ConflictCheckRequest(BaseModel):
+    """Запрос проверки конфликтов"""
+    
+    classroom_id: int
+    lesson_date: date
+    start_time: time
+    end_time: time
+    exclude_lesson_id: Optional[int] = None
 
 
-class LessonCreatedResponse(BaseModel):
-    """Ответ на создание урока"""
-    message: str
-    lesson: LessonInfo
-
-
-class SlotGenerationResponse(BaseModel):
-    """Ответ на генерацию слотов"""
-    message: str
-    studio_id: int
-    week_start: str
-    total_slots: int
-    slots_per_day: int
+class ConflictCheckResponse(BaseModel):
+    """Результат проверки конфликтов"""
+    
+    has_conflict: bool
+    conflicting_lessons: List[Dict[str, Any]] = Field(default_factory=list)
