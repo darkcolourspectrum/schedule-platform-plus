@@ -110,9 +110,7 @@ async def proxy_request(service_name: str, path: str, request: Request):
             target_url = f"{target_service}/api/v1/profiles/{path}"
     
     elif service_name == "schedule":
-        # Schedule Service
-        # /api/schedule/teacher/my-schedule -> /api/v1/schedule/teacher/my-schedule
-        target_url = f"{target_service}/api/v1/schedule/{path}"
+        target_url = f"{target_service}/api/v1/{path}"
     
     elif service_name == "admin":
         # Admin Service (НОВОЕ)

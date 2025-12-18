@@ -3,7 +3,7 @@ Pydantic schemas для Recurring Patterns
 """
 
 from typing import Optional, List
-from datetime import date, time
+from datetime import date, time, datetime
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -60,8 +60,8 @@ class RecurringPatternResponse(BaseModel):
     is_active: bool
     
     notes: Optional[str]
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     
     # Дополнительные поля
     student_ids: List[int] = Field(default_factory=list)
