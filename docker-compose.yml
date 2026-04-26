@@ -23,6 +23,28 @@ services:
     networks:
       - schedule_platform_network
 
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: schedule_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - schedule_platform_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # REDIS
   redis:
     image: redis:7-alpine
     container_name: schedule_redis
@@ -39,7 +61,7 @@ services:
     networks:
       - schedule_platform_network
 
-  # ===== API GATEWAY =====
+# ===== API GATEWAY =====
   api-gateway:
     build:
       context: .
@@ -59,6 +81,7 @@ services:
       PROFILE_SERVICE_URL: http://profile-service:8002
       SCHEDULE_SERVICE_URL: http://schedule-service:8001
       ADMIN_SERVICE_URL: http://admin-service:8003
+      NOTIFICATION_SERVICE_URL: http://notification-service:8004
     ports:
       - "8080:8080"
     depends_on:
@@ -66,6 +89,7 @@ services:
       - profile-service
       - schedule-service
       - admin-service
+      - notification-service
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
       interval: 30s
@@ -370,7 +394,7 @@ services:
         condition: service_healthy
       auth-service:
         condition: service_healthy
-    # ✅ АВТОМАТИЧЕСКИЕ МИГРАЦИИ
+    # АВТОМАТИЧЕСКИЕ МИГРАЦИИ
     command: >
       sh -c "
         echo '🔄 Applying Admin Service migrations...' &&
@@ -386,6 +410,41 @@ services:
       start_period: 60s
     networks:
       - schedule_platform_network
+  
+  # NOTIFICATION SERVICE
+  notification-service:
+    build:
+      context: .
+      dockerfile: services/notification_service/Dockerfile
+    container_name: notification_service
+    restart: unless-stopped
+    environment:
+      APP_NAME: Notification Service
+      DEBUG: ${DEBUG:-true}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      HOST: 0.0.0.0
+      PORT: 8004
+      DATABASE_URL: ${NOTIFICATION_DATABASE_URL}
+      JWT_BLACKLIST_REDIS_URL: redis://redis:6379/15
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      CORS_ALLOW_CREDENTIALS: "true"
+      RABBITMQ_URL: ${RABBITMQ_URL}
+    ports:
+      - "8004:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - schedule_platform_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ===== MANAGEMENT TOOLS =====
   pgadmin:
@@ -432,6 +491,9 @@ volumes:
     driver: local
   pgadmin_data:
     driver: local
+  rabbitmq_data:
+    driver: local
+    
 
 networks:
   schedule_platform_network:

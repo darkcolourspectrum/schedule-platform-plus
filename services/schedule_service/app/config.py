@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # ===== INTERNAL API KEY =====
     internal_api_key: str = Field(..., env="INTERNAL_API_KEY")
     
+    # ===== RABBITMQ =====
+    rabbitmq_url: str = Field("amqp://guest:guest@rabbitmq:5672/", env="RABBITMQ_URL")
+    
     # ===== ADMIN SERVICE SETTINGS =====
     admin_service_url: str = Field("http://localhost:8082", env="ADMIN_SERVICE_URL")
     admin_service_timeout: int = Field(10, env="ADMIN_SERVICE_TIMEOUT")

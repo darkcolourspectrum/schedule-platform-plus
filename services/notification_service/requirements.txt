@@ -1,0 +1,32 @@
+# FastAPI и веб-сервер
+fastapi==0.115.9
+uvicorn==0.34.0
+starlette==0.45.3
+
+# База данных и ORM
+SQLAlchemy==2.0.38
+asyncpg==0.30.0
+alembic==1.14.1
+
+# Redis (для shared/auth_lib blacklist)
+redis==5.0.1
+
+# Pydantic
+pydantic==2.10.6
+pydantic_core==2.27.2
+pydantic-settings==2.8.1
+
+# Конфигурация
+python-dotenv==1.0.1
+
+# JWT (для валидации токенов через shared/auth_lib)
+python-jose[cryptography]==3.4.0
+
+# RabbitMQ (понадобится со Дня 2)
+aio-pika==9.4.3
+
+# Scheduler для отложенных напоминаний (День 4)
+apscheduler==3.10.4
+
+# Работа с датами
+python-dateutil==2.9.0

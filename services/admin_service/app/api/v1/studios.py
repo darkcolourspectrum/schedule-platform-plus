@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.schemas.studio import StudioCreate, StudioUpdate, StudioResponse
 from app.services.studio_service import StudioService
-from app.dependencies import get_studio_service, get_current_admin
+from app.dependencies import get_studio_service, get_current_admin, get_current_user
+from app.services.access_service import get_user_accessible_studio_ids, user_has_access_to_studio
 from app.schemas.classroom import ClassroomCreate, ClassroomUpdate, ClassroomResponse
 from app.services.classroom_service import ClassroomService
 from app.dependencies import get_classroom_service
@@ -14,23 +15,40 @@ router = APIRouter(prefix="/studios", tags=["Studios"])
 @router.get("", response_model=List[StudioResponse])
 async def get_studios(
     include_inactive: bool = False,
-    admin: dict = Depends(get_current_admin),
+    current_user: dict = Depends(get_current_user),
     studio_service: StudioService = Depends(get_studio_service)
 ):
-    """Get all studios"""
-    studios = await studio_service.get_all_studios(include_inactive)
-    return studios
+    """
+    Get studios accessible to current user.
+    Admin sees all studios. Other roles see only studios they have access to.
+    """
+    accessible_ids = get_user_accessible_studio_ids(current_user)
+    
+    if accessible_ids is None:
+        # Admin
+        return await studio_service.get_all_studios(include_inactive)
+    
+    if not accessible_ids:
+        return []
+    
+    return await studio_service.get_studios_by_ids(accessible_ids, include_inactive)
 
 @router.get("/{studio_id}", response_model=StudioResponse)
 async def get_studio(
     studio_id: int,
-    admin: dict = Depends(get_current_admin),
+    current_user: dict = Depends(get_current_user),
     studio_service: StudioService = Depends(get_studio_service)
 ):
-    """Get studio by ID"""
+    """Get studio by ID. Access checked against user's accessible studios."""
+    if not user_has_access_to_studio(current_user, studio_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к этой студии"
+        )
+    
     studio = await studio_service.get_studio(studio_id)
     if not studio:
-        raise HTTPException(status_code=404, detail="Studio not found")
+        raise HTTPException(status_code=404, detail="Студия не найдена")
     return studio
 
 @router.post("", response_model=StudioResponse, status_code=status.HTTP_201_CREATED)
@@ -54,7 +72,7 @@ async def update_studio(
     update_data = data.model_dump(exclude_unset=True)
     studio = await studio_service.update_studio(studio_id, **update_data)
     if not studio:
-        raise HTTPException(status_code=404, detail="Studio not found")
+        raise HTTPException(status_code=404, detail="Студия не найдена")
     return studio
 
 @router.delete("/{studio_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -66,17 +84,22 @@ async def delete_studio(
     """Delete studio"""
     deleted = await studio_service.delete_studio(studio_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail="Studio not found")
+        raise HTTPException(status_code=404, detail="Студия не найдена")
     
 # ==================== CLASSROOMS ====================
 
 @router.get("/{studio_id}/classrooms", response_model=List[ClassroomResponse])
 async def get_studio_classrooms(
     studio_id: int,
-    admin: dict = Depends(get_current_admin),
+    current_user: dict = Depends(get_current_user),
     classroom_service: ClassroomService = Depends(get_classroom_service)
 ):
-    """Get all classrooms in studio"""
+    """Get all classrooms in studio. Access checked against user's accessible studios."""
+    if not user_has_access_to_studio(current_user, studio_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к этой студии"
+        )
     return await classroom_service.get_studio_classrooms(studio_id)
 
 @router.post("/{studio_id}/classrooms", response_model=ClassroomResponse, status_code=status.HTTP_201_CREATED)

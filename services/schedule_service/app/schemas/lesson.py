@@ -3,7 +3,7 @@ Pydantic schemas для Lessons
 """
 
 from typing import Optional, List
-from datetime import date, time
+from datetime import date, time, datetime
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -57,8 +57,8 @@ class LessonResponse(BaseModel):
     
     notes: Optional[str]
     cancellation_reason: Optional[str]
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     
     # Дополнительные поля
     students: List[LessonStudentInfo] = Field(default_factory=list)

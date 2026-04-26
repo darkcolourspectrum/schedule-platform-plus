@@ -38,6 +38,7 @@ SERVICES = {
     "profile": settings.profile_service_url,
     "schedule": settings.schedule_service_url,
     "admin": settings.admin_service_url,
+    "notifications": settings.notification_service_url,
 }
 
 
@@ -118,6 +119,11 @@ async def proxy_request(service_name: str, path: str, request: Request):
         # /api/admin/studios -> /api/v1/studios
         # /api/admin/dashboard -> /api/v1/dashboard
         target_url = f"{target_service}/api/v1/{path}"
+    
+    elif service_name == "notifications":
+        # Notification Service
+        # /api/notifications/... -> /api/v1/notifications/...
+        target_url = f"{target_service}/api/v1/notifications/{path}" if path else f"{target_service}/api/v1/notifications"
     
     else:
         # Для остальных сервисов (если добавятся)

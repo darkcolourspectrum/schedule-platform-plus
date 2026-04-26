@@ -14,6 +14,21 @@ class StudioService:
             return await self.repo.get_all()
         return await self.repo.get_active_studios()
     
+    async def get_studios_by_ids(self, studio_ids: List[int], include_inactive: bool = False):
+        """Получить студии по списку ID."""
+        if not studio_ids:
+            return []
+        
+        from sqlalchemy import select
+        from app.models.studio import Studio
+        
+        stmt = select(Studio).where(Studio.id.in_(studio_ids))
+        if not include_inactive:
+            stmt = stmt.where(Studio.is_active.is_(True))
+        
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+    
     async def get_studio(self, studio_id: int) -> Optional[Studio]:
         return await self.repo.get_by_id(studio_id)
     

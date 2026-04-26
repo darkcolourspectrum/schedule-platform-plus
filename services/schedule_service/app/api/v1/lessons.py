@@ -22,6 +22,8 @@ from app.dependencies import (
 )
 from app.core.security import extract_role_name
 
+from app.messaging import publish_lesson_created
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/lessons", tags=["Lessons"])
@@ -67,10 +69,36 @@ async def create_lesson(
         for sid in student_ids
     ]
     
-    response = LessonResponse.model_validate(lesson)
-    response.students = students
-    response.is_recurring = False
+    response = LessonResponse(
+        id=lesson.id,
+        studio_id=lesson.studio_id,
+        teacher_id=lesson.teacher_id,
+        classroom_id=lesson.classroom_id,
+        recurring_pattern_id=lesson.recurring_pattern_id,
+        lesson_date=lesson.lesson_date,
+        start_time=lesson.start_time,
+        end_time=lesson.end_time,
+        status=lesson.status,
+        notes=lesson.notes,
+        cancellation_reason=lesson.cancellation_reason,
+        created_at=lesson.created_at,
+        updated_at=lesson.updated_at,
+        students=students,
+        is_recurring=False,
+    )
     
+    # Публикация события для Notification Service
+    await publish_lesson_created(
+        lesson_id=lesson.id,
+        teacher_id=lesson.teacher_id,
+        student_ids=student_ids,
+        studio_id=lesson.studio_id,
+        classroom_id=lesson.classroom_id,
+        lesson_date=lesson.lesson_date,
+        start_time=lesson.start_time,
+        end_time=lesson.end_time,
+    )
+
     return response
 
 

@@ -11,6 +11,8 @@ from app.config import settings
 from app.api.v1.router import api_router
 from app.database.redis_client import redis_client
 
+from app.messaging import publisher
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO if not settings.debug else logging.DEBUG,
@@ -28,13 +30,14 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
     logger.info(f"Environment: {settings.environment}")
     
-    # Подключаемся к Redis
     await redis_client.connect()
+    await publisher.connect()
     
     yield
     
     # Shutdown
     logger.info("Shutting down...")
+    await publisher.close()
     await redis_client.disconnect()
 
 
