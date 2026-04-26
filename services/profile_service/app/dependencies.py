@@ -44,31 +44,66 @@ async def get_profile_service(db: DatabaseSession) -> ProfileService:
 
 # Аутентификация и авторизация
 
+import redis.asyncio as redis_lib
+from shared.auth_lib import (
+    JWTValidator,
+    BlacklistChecker,
+    TokenPayload,
+    InvalidTokenError,
+    TokenTypeMismatchError,
+)
+from app.config import settings as _profile_settings
+
+
+_jwt_validator: Optional[JWTValidator] = None
+_blacklist_checker: Optional[BlacklistChecker] = None
+_redis_for_blacklist: Optional[redis_lib.Redis] = None
+
+
+def _get_jwt_validator() -> JWTValidator:
+    global _jwt_validator
+    if _jwt_validator is None:
+        _jwt_validator = JWTValidator(
+            secret_key=_profile_settings.jwt_secret_key,
+            algorithm=_profile_settings.jwt_algorithm,
+        )
+    return _jwt_validator
+
+
+async def _get_blacklist_checker() -> BlacklistChecker:
+    global _blacklist_checker, _redis_for_blacklist
+    if _blacklist_checker is None:
+        _redis_for_blacklist = redis_lib.from_url(
+            _profile_settings.jwt_blacklist_redis_url,
+            encoding="utf-8",
+            decode_responses=False,
+        )
+        _blacklist_checker = BlacklistChecker(
+            redis_client=_redis_for_blacklist,
+            fail_open=True,
+        )
+    return _blacklist_checker
+
+
 async def get_current_user(
     authorization: Optional[str] = Header(None),
-    x_user_id: Optional[int] = Header(None)  # Для внутренних запросов
+    x_user_id: Optional[int] = Header(None)
 ) -> Dict[str, Any]:
     """
-    Получение текущего пользователя из токена или заголовка
+    Получение текущего пользователя.
     
-    Args:
-        authorization: Bearer токен
-        x_user_id: ID пользователя для внутренних запросов
-        
-    Returns:
-        Словарь с данными пользователя
-        
-    Raises:
-        HTTPException: Если пользователь не найден или токен невалиден
+    1. Внутренние запросы через X-User-ID → данные напрямую из Auth.
+    2. Запросы с Bearer токеном:
+       - локальная валидация подписи (shared/auth_lib)
+       - проверка blacklist (Redis, через shared/auth_lib)
+       - получение свежих данных пользователя из Auth по HTTP
     """
     try:
-        # Если передан X-User-ID (внутренний запрос)
         if x_user_id:
             user_data = await auth_client.get_user_by_id(x_user_id)
             if user_data:
                 return user_data
         
-        # Если передан Authorization токен
         if authorization:
             if not authorization.startswith("Bearer "):
                 raise HTTPException(
@@ -76,23 +111,26 @@ async def get_current_user(
                     detail="Invalid authorization header format"
                 )
             
-            token = authorization.split(" ")[1]
-            token_data = await auth_client.validate_token(token)
+            token = authorization.split(" ", 1)[1]
             
-            if not token_data:
+            validator = _get_jwt_validator()
+            blacklist = await _get_blacklist_checker()
+            
+            try:
+                payload: TokenPayload = validator.decode(token)
+            except (InvalidTokenError, TokenTypeMismatchError) as exc:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid or expired token"
+                    detail=str(exc),
                 )
             
-            user_id = token_data.get("user_id")
-            if not user_id:
+            if await blacklist.is_revoked(payload):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Token does not contain user_id"
+                    detail="Token has been revoked",
                 )
             
-            user_data = await auth_client.get_user_by_id(user_id)
+            user_data = await auth_client.get_user_by_id(payload.user_id)
             if not user_data:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -101,7 +139,6 @@ async def get_current_user(
             
             return user_data
         
-        # Нет аутентификационных данных
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required"

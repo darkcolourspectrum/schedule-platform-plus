@@ -280,7 +280,9 @@ class AuthService:
         
         # Инвалидация кеша токенов пользователя
         await self.redis_blacklist.invalidate_user_tokens_cache(user_id)
-        
+        # User-level отзыв access-токенов (видим во всех сервисах через shared/auth_lib)
+        await self.redis_blacklist.revoke_all_user_tokens(user_id)
+
         logger.info(f"User {user_id} logged out from all devices ({revoked_count} tokens revoked)")
         
         return {"message": f"Logged out from {revoked_count} devices"}

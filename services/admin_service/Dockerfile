@@ -6,16 +6,18 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+ENV PYTHONPATH=/app
 
 # Copy requirements
-COPY requirements.txt .
+COPY services/admin_service/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY . .
+COPY services/admin_service/ .
+COPY shared/ /app/shared/
 
 # Create non-root user
 RUN adduser --disabled-password --gecos '' appuser && \

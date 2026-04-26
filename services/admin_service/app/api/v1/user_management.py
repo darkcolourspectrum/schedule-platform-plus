@@ -2,7 +2,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.auth import get_current_admin
+from app.dependencies import get_current_admin
 from app.services.user_management_service import UserManagementService
 from app.schemas.user import (
     UserDetailResponse,  # ← Используем полную схему

@@ -1,6 +1,6 @@
 """Core package initialization"""
 
-from app.core.security import decode_jwt_token, extract_role_name, verify_internal_api_key
+from app.core.security import extract_role_name, verify_internal_api_key
 from app.core.exceptions import (
     ScheduleServiceException,
     RecurringPatternNotFoundException,
@@ -16,7 +16,6 @@ from app.core.exceptions import (
 )
 
 __all__ = [
-    "decode_jwt_token",
     "extract_role_name",
     "verify_internal_api_key",
     "ScheduleServiceException",

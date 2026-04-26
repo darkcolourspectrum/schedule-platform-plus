@@ -1,7 +1,7 @@
 """Admin Dashboard API endpoints"""
 from fastapi import APIRouter, Depends
 
-from app.core.auth import get_current_admin
+from app.dependencies import get_current_admin
 from app.services.dashboard_service import DashboardService
 from app.schemas.dashboard import SystemStatsResponse, AdminDashboardResponse
 from app.dependencies import get_dashboard_service
@@ -24,4 +24,4 @@ async def get_admin_dashboard(
     service: DashboardService = Depends(get_dashboard_service)
 ):
     """Получить полный дашборд администратора"""
-    return await service.get_admin_dashboard(current_user["id"])
+    return await service.get_admin_dashboard(current_user["user_id"])

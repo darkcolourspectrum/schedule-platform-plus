@@ -12,28 +12,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def decode_jwt_token(token: str) -> Optional[Dict[str, Any]]:
-    """
-    Декодирование JWT токена
-    
-    Args:
-        token: JWT токен
-        
-    Returns:
-        Payload токена или None если токен невалидный
-    """
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm]
-        )
-        return payload
-    except JWTError as e:
-        logger.warning(f"JWT decode error: {e}")
-        return None
-
-
 def extract_role_name(role_data: Any) -> str:
     """
     Извлечение имени роли из различных форматов

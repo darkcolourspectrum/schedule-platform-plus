@@ -15,7 +15,7 @@ from app.services.lesson_generator_service import LessonGeneratorService
 from app.services.recurring_pattern_service import RecurringPatternService
 from app.services.lesson_service import LessonService
 from app.services.schedule_service import ScheduleService
-from app.core.security import decode_jwt_token, extract_role_name, verify_internal_api_key
+from app.core.security import extract_role_name, verify_internal_api_key
 from app.config import settings
 
 security = HTTPBearer(auto_error=False)
@@ -95,29 +95,72 @@ async def get_schedule_service(
 
 # ========== AUTH DEPENDENCIES ==========
 
+import redis.asyncio as redis_lib
+from shared.auth_lib import (
+    JWTValidator,
+    BlacklistChecker,
+    TokenPayload,
+    InvalidTokenError,
+    TokenTypeMismatchError,
+)
+
+_jwt_validator: Optional[JWTValidator] = None
+_blacklist_checker: Optional[BlacklistChecker] = None
+_redis_client: Optional[redis_lib.Redis] = None
+
+
+def get_jwt_validator() -> JWTValidator:
+    global _jwt_validator
+    if _jwt_validator is None:
+        _jwt_validator = JWTValidator(
+            secret_key=settings.jwt_secret_key,
+            algorithm=settings.jwt_algorithm,
+        )
+    return _jwt_validator
+
+
+async def get_blacklist_checker() -> BlacklistChecker:
+    global _blacklist_checker, _redis_client
+    if _blacklist_checker is None:
+        _redis_client = redis_lib.from_url(
+            settings.jwt_blacklist_redis_url,
+            encoding="utf-8",
+            decode_responses=False,
+        )
+        _blacklist_checker = BlacklistChecker(
+            redis_client=_redis_client,
+            fail_open=True,
+        )
+    return _blacklist_checker
+
+
 async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    validator: JWTValidator = Depends(get_jwt_validator),
+    blacklist: BlacklistChecker = Depends(get_blacklist_checker),
 ) -> dict:
-    """
-    Получить текущего пользователя из JWT токена
-    
-    Returns:
-        Payload токена с информацией о пользователе
-    """
+    """Получить текущего пользователя из JWT токена с проверкой blacklist."""
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated"
+            detail="Not authenticated",
         )
     
-    payload = decode_jwt_token(credentials.credentials)
-    if not payload:
+    try:
+        payload: TokenPayload = validator.decode(credentials.credentials)
+    except (InvalidTokenError, TokenTypeMismatchError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
+            detail=str(exc),
         )
     
-    return payload
+    if await blacklist.is_revoked(payload):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked",
+        )
+    
+    return payload.model_dump()
 
 
 async def get_current_admin(
@@ -125,13 +168,11 @@ async def get_current_admin(
 ) -> dict:
     """Проверить что пользователь - админ"""
     role = extract_role_name(current_user.get("role"))
-    
     if role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
         )
-    
     return current_user
 
 
@@ -140,31 +181,18 @@ async def get_current_teacher(
 ) -> dict:
     """Проверить что пользователь - преподаватель (или админ)"""
     role = extract_role_name(current_user.get("role"))
-    
     if role not in ["teacher", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Teacher or admin access required"
         )
-    
     return current_user
 
 
 async def verify_internal_key(
     x_internal_api_key: Optional[str] = Header(None)
 ) -> bool:
-    """
-    Проверка Internal API Key для межсервисного взаимодействия
-    
-    Args:
-        x_internal_api_key: API ключ из заголовка
-        
-    Returns:
-        True если ключ валидный
-        
-    Raises:
-        HTTPException: Если ключ невалидный
-    """
+    """Проверка Internal API Key для межсервисного взаимодействия"""
     if not verify_internal_api_key(x_internal_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -209,7 +237,7 @@ def check_teacher_access(user: dict, teacher_id: int) -> bool:
         True если есть доступ
     """
     role = extract_role_name(user.get("role"))
-    user_id = user.get("id")
+    user_id = user.get("user_id")
     
     # Админ имеет доступ ко всем
     if role == "admin":
@@ -234,7 +262,7 @@ def check_student_access(user: dict, student_id: int) -> bool:
         True если есть доступ
     """
     role = extract_role_name(user.get("role"))
-    user_id = user.get("id")
+    user_id = user.get("user_id")
     
     # Админ и преподаватель имеют доступ ко всем ученикам своей студии
     if role in ["admin", "teacher"]:

@@ -42,8 +42,8 @@ services:
   # ===== API GATEWAY =====
   api-gateway:
     build:
-      context: ./services/api_gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/api_gateway/Dockerfile
     container_name: api_gateway
     restart: always
     environment:
@@ -80,8 +80,8 @@ services:
   # AUTH SERVICE
   auth-service:
     build:
-      context: ./services/auth_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/auth_service/Dockerfile
     container_name: auth_service
     restart: always
     environment:
@@ -97,6 +97,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379/0
+      JWT_BLACKLIST_REDIS_URL: redis://redis:6379/15
       
       # App settings
       APP_NAME: Auth Service
@@ -140,8 +141,8 @@ services:
   # PROFILE SERVICE
   profile-service:
     build:
-      context: ./services/profile_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/profile_service/Dockerfile
     container_name: profile_service
     restart: always
     environment:
@@ -157,6 +158,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379/2
+      JWT_BLACKLIST_REDIS_URL: redis://redis:6379/15
       
       # App settings
       APP_NAME: Profile Service
@@ -216,10 +218,11 @@ services:
     networks:
       - schedule_platform_network
 
+  # SCHEDULE SERVICE
   schedule-service:
     build:
-      context: ./services/schedule_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/schedule_service/Dockerfile
     container_name: schedule_service
     restart: always
     environment:
@@ -252,6 +255,7 @@ services:
       REDIS_PORT: 6379
       REDIS_DB: 4
       REDIS_URL: redis://redis:6379/4
+      JWT_BLACKLIST_REDIS_URL: redis://redis:6379/15
       REDIS_CACHE_TTL: 3600
       
       # Security (ДОЛЖНЫ СОВПАДАТЬ с Auth Service!)
@@ -302,8 +306,8 @@ services:
   # ADMIN SERVICE
   admin-service:
     build:
-      context: ./services/admin_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/admin_service/Dockerfile
     container_name: admin_service
     restart: always
     environment:
@@ -328,6 +332,7 @@ services:
       REDIS_PORT: 6379
       REDIS_DB: 3
       REDIS_URL: redis://redis:6379/3
+      JWT_BLACKLIST_REDIS_URL: redis://redis:6379/15
       
       # App settings
       APP_NAME: Admin Service

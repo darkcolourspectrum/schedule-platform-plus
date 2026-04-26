@@ -10,11 +10,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
 from app.database.redis_client import redis_client
+import redis.asyncio as redis_lib
+from app.config import settings as _auth_settings
 from app.repositories.user_repository import TokenBlacklistRepository
 from app.database.connection import get_async_session
 
 logger = logging.getLogger(__name__)
 
+_blacklist_redis = None
+
+async def _get_blacklist_redis():
+    global _blacklist_redis
+    if _blacklist_redis is None:
+        _blacklist_redis = redis_lib.from_url(
+            _auth_settings.jwt_blacklist_redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+        )
+    return _blacklist_redis
 
 class RedisBlacklistService:
     """Сервис для кеширования JWT blacklist в Redis"""
@@ -141,6 +154,55 @@ class RedisBlacklistService:
         except Exception as e:
             logger.warning(f"Failed to invalidate user tokens cache: {e}")
     
+    async def revoke_all_user_tokens(
+        self,
+        user_id: int,
+        ttl_seconds: Optional[int] = None
+    ) -> None:
+        """
+        User-level отзыв всех существующих access-токенов пользователя.
+        
+        Записывает в Redis ключ user:{user_id}:revoked_after с текущим
+        Unix-timestamp. После этого все сервисы при валидации увидят,
+        что любой токен с iat < revoked_after отозван.
+        
+        Используется при:
+            - logout со всех устройств
+            - смене роли пользователя
+            - деактивации аккаунта
+            - изменении studio_id
+        
+        Args:
+            user_id: ID пользователя.
+            ttl_seconds: TTL ключа в секундах. По умолчанию равен сроку
+                жизни access-токена — после истечения этого срока
+                старые токены и так станут невалидны, держать revocation
+                ключ дольше нет смысла.
+        """
+        from datetime import datetime
+        from app.config import settings
+        
+        if ttl_seconds is None:
+            ttl_seconds = settings.jwt_access_token_expire_minutes * 60
+        
+        try:
+            now_ts = int(datetime.utcnow().timestamp())
+            key = f"user:{user_id}:revoked_after"
+            
+            client = await _get_blacklist_redis()
+            await client.set(key, str(now_ts), ex=ttl_seconds)
+            
+            logger.info(
+                "User-level token revocation set: user_id=%s revoked_after=%s ttl=%ss",
+                user_id, now_ts, ttl_seconds
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to set user-level revocation: user_id=%s error=%s",
+                user_id, exc
+            )
+            raise
+
     async def get_cache_stats(self) -> dict:
         """Получение статистики кеша blacklist"""
         try:

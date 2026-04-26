@@ -5,8 +5,9 @@ from sqlalchemy.orm import joinedload
 
 from app.database.connection import AuthAsyncSessionLocal, AdminAsyncSessionLocal
 from app.models.auth_models import User, Role
-from app.models.studio import Studio  # ← ИСПРАВЛЕН ИМПОРТ
+from app.models.studio import Studio  
 
+from app.services.token_revocation_service import token_revocation_service
 
 class UserManagementService:
     """Сервис управления пользователями через Auth DB"""
@@ -62,6 +63,7 @@ class UserManagementService:
             await session.refresh(user, ["role"])
             
             studio_name = await self._get_studio_name(user.studio_id) if user.studio_id else None
+            await token_revocation_service.revoke_all_user_tokens(user_id, reason="role_changed")
             return self._user_to_dict(user, studio_name)
     
     async def assign_user_to_studio(self, user_id: int, studio_id: int) -> dict:
@@ -75,6 +77,7 @@ class UserManagementService:
             await session.commit()
             
             studio_name = await self._get_studio_name(studio_id)
+            await token_revocation_service.revoke_all_user_tokens(user_id, reason="studio_changed")
             return self._user_to_dict(user, studio_name)
     
     async def activate_user(self, user_id: int) -> dict:
@@ -101,6 +104,7 @@ class UserManagementService:
             await session.commit()
             
             studio_name = await self._get_studio_name(user.studio_id) if user.studio_id else None
+            await token_revocation_service.revoke_all_user_tokens(user_id, reason="studio_changed")
             return self._user_to_dict(user, studio_name)
     
     async def _get_studio_name(self, studio_id: int) -> Optional[str]:

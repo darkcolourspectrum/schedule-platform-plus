@@ -51,7 +51,7 @@ async def create_admin_user():
         security = SecurityManager()
         
         # Проверяем, есть ли уже администратор
-        existing_admin = await user_repo.get_by_email("admin@studio.local")
+        existing_admin = await user_repo.get_by_email("admin@example.com")
         if existing_admin:
             print("⚠️  Администратор уже существует")
             return
@@ -66,7 +66,7 @@ async def create_admin_user():
         hashed_password = security.hash_password("admin123")
         
         admin_user = await user_repo.create_user(
-            email="admin@studio.local",
+            email="admin@example.com",
             first_name="Системный",
             last_name="Администратор",
             role_id=admin_role.id,
@@ -75,47 +75,11 @@ async def create_admin_user():
         )
         
         print("✅ Создан администратор:")
-        print(f"   Email: admin@studio.local")
+        print(f"   Email: admin@example.com")
         print(f"   Пароль: admin123")
         print(f"   ID: {admin_user.id}")
         
         await db.commit()
-
-
-async def create_test_studio():
-    """Создание тестовой студии"""
-    session_factory = create_async_session_factory()
-    
-    async with session_factory() as db:
-        from app.models.studio import Studio
-        from sqlalchemy import select
-        
-        # Проверяем, есть ли уже студия
-        query = select(Studio).where(Studio.name == "Тестовая Студия")
-        result = await db.execute(query)
-        existing_studio = result.scalar_one_or_none()
-        
-        if existing_studio:
-            print("⚠️  Тестовая студия уже существует")
-            return
-        
-        # Создаем студию
-        studio = Studio(
-            name="Тестовая Студия",
-            description="Студия для тестирования системы",
-            address="г. Москва, ул. Тестовая, д. 1",
-            phone="+7 (900) 123-45-67",
-            email="info@teststudio.local",
-            is_active=True
-        )
-        
-        db.add(studio)
-        await db.commit()
-        await db.refresh(studio)
-        
-        print("✅ Создана тестовая студия:")
-        print(f"   Название: {studio.name}")
-        print(f"   ID: {studio.id}")
 
 
 async def main():
@@ -135,10 +99,6 @@ async def main():
         await init_roles()
         print()
         
-        # Создаем тестовую студию
-        await create_test_studio()
-        print()
-        
         # Создаем администратора
         await create_admin_user()
         print()
@@ -149,7 +109,7 @@ async def main():
         print("   python -m app.main")
         print()
         print("🔑 Данные для входа в систему:")
-        print("   Email: admin@studio.local")
+        print("   Email: admin@example.com")
         print("   Пароль: admin123")
         
         return True

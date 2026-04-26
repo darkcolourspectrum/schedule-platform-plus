@@ -7,16 +7,18 @@ RUN apt-get update && apt-get install -y \
 
 # Создаем рабочую директорию
 WORKDIR /app
+ENV PYTHONPATH=/app
 
 # Копируем requirements.txt
-COPY requirements.txt .
+COPY services/profile_service/requirements.txt .
 
 # Устанавливаем Python зависимости
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Копируем исходный код
-COPY . .
+COPY services/profile_service/ .
+COPY shared/ /app/shared/
 
 # Создаем папки для статических файлов
 RUN mkdir -p /app/static/avatars

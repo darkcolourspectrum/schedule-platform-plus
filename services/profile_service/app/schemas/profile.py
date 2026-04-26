@@ -78,8 +78,8 @@ class ProfileResponse(BaseModel):
     # Настройки
     is_profile_public: bool = True
     show_contact_info: bool = False
-    notification_preferences: NotificationPreferences
-    profile_settings: ProfileSettings
+    notification_preferences: NotificationPreferences = Field(default_factory=NotificationPreferences)
+    profile_settings: ProfileSettings = Field(default_factory=ProfileSettings)
     
     # Статистика
     profile_views: int = 0

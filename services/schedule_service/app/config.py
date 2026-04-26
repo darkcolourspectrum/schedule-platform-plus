@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     redis_port: int = Field(6379, env="REDIS_PORT")
     redis_db: int = Field(4, env="REDIS_DB")
     redis_cache_ttl: int = Field(3600, env="REDIS_CACHE_TTL")
+    jwt_blacklist_redis_url: str = Field("redis://localhost:6379/15", env="JWT_BLACKLIST_REDIS_URL")
     
     # ===== JWT SETTINGS =====
     jwt_secret_key: str = Field(..., env="JWT_SECRET_KEY")

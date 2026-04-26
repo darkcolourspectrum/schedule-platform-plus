@@ -3,6 +3,7 @@ FROM python:3.11-slim
 
 # Рабочая директория
 WORKDIR /app
+ENV PYTHONPATH=/app
 
 # Установка системных зависимостей
 RUN apt-get update && apt-get install -y \
@@ -11,13 +12,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Копируем requirements
-COPY requirements.txt .
+COPY services/schedule_service/requirements.txt .
 
 # Устанавливаем Python зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем код приложения
-COPY . .
+COPY services/schedule_service/ .
+COPY shared/ /app/shared/
 
 # Создаём директорию для логов
 RUN mkdir -p /app/logs
