@@ -56,17 +56,18 @@ class ProfileService:
             Словарь с полными данными профиля или None
         """
         try:
-            # Проверяем кэш
+            # Кэш используем только для просмотра ЧУЖИХ профилей.
+            # Свой профиль читаем всегда из БД, чтобы пользователь сразу
+            # видел собственные изменения (read-your-own-writes).
+            is_own_profile = (viewer_user_id is not None and viewer_user_id == user_id)
             cache_key = f"profile_full:{user_id}"
-            cached_data = await cache_service.get(cache_key)
-            if cached_data:
-                logger.debug(f"Профиль пользователя {user_id} получен из кэша")
-                
-                # Увеличиваем счетчик просмотров если это другой пользователь
-                if viewer_user_id and viewer_user_id != user_id:
-                    await self._increment_profile_views(user_id, viewer_user_id)
-                
-                return cached_data
+            
+            if not is_own_profile:
+                cached_data = await cache_service.get(cache_key)
+                if cached_data:
+                    logger.debug(f"Профиль пользователя {user_id} получен из кэша")
+                    
+                    return cached_data
             
             # Получаем данные пользователя из Auth Service
             user_data = await auth_client.get_user_by_id(user_id)
@@ -81,19 +82,16 @@ class ProfileService:
             if not profile:
                 profile = await self._create_default_profile(user_id, user_data)
             
-            # Увеличиваем счетчик просмотров если это другой пользователь
-            if viewer_user_id and viewer_user_id != user_id:
-                profile = await self._increment_profile_views(user_id, viewer_user_id)
-            
             # Собираем полные данные профиля
             full_profile = await self._build_full_profile(user_data, profile, viewer_user_id == user_id)
             
-            # Кэшируем результат
-            await cache_service.set(
-                cache_key, 
-                full_profile, 
-                ttl=settings.cache_user_profile_ttl
-            )
+            # В кэш кладём только если это просмотр чужого профиля.
+            if not is_own_profile:
+                await cache_service.set(
+                    cache_key, 
+                    full_profile, 
+                    ttl=settings.cache_user_profile_ttl
+                )
             
             logger.debug(f"Собран полный профиль пользователя {user_id}")
             return full_profile
@@ -157,55 +155,41 @@ class ProfileService:
         **update_data
     ) -> Optional[UserProfile]:
         """
-        Обновление профиля пользователя
+        Обновление профиля пользователя в Profile БД.
         
-        Args:
-            user_id: ID пользователя
-            **update_data: Данные для обновления
-            
-        Returns:
-            Обновленный профиль или None
+        Profile владеет: display_name, bio, avatar_filename, phone(?), 
+        date_of_birth, is_profile_public, show_contact_info, 
+        notification_preferences, profile_settings.
+        
+        Базовые поля (first_name, last_name, role, email) принадлежат Auth -
+        фронт должен слать их в Auth напрямую.
         """
         try:
-            # Проверяем наличие полей которые нужно обновить в Auth Service
-            auth_fields = {}
-            profile_fields = {}
+            # Защита: отбрасываем поля которые принадлежат Auth.
+            auth_only_fields = {'first_name', 'last_name'}
+            stray = set(update_data.keys()) & auth_only_fields
+            if stray:
+                logger.warning(
+                    f"Profile.update_profile получил Auth-поля {stray}, игнорируем. "
+                    f"Фронт должен отправлять их в Auth Service напрямую."
+                )
+                update_data = {
+                    k: v for k, v in update_data.items()
+                    if k not in auth_only_fields
+                }
             
-            for key, value in update_data.items():
-                if key in ['first_name', 'last_name', 'phone', 'bio', 'avatar_url']:
-                    auth_fields[key] = value
-                else:
-                    profile_fields[key] = value
+            if not update_data:
+                logger.debug(f"Нет полей для обновления профиля {user_id}")
+                return await self.profile_repo.get_by_user_id(user_id)
             
-            # Если есть поля для Auth Service - обновляем их там
-            if auth_fields:
-                logger.info(f"Обновление полей в Auth Service для пользователя {user_id}: {list(auth_fields.keys())}")
-                updated_user_data = await auth_client.update_user(user_id, auth_fields)
-                
-                if not updated_user_data:
-                    logger.warning(f"Не удалось обновить данные в Auth Service для пользователя {user_id}")
-                else:
-                    logger.info(f"Успешно обновлены поля в Auth Service: {list(auth_fields.keys())}")
-            
-            # Обновляем профиль в Profile Service
-            if profile_fields or auth_fields:
-                # Если обновляли поля в Auth Service, синхронизируем их в Profile Service
-                update_data_for_profile = {**profile_fields}
-                if auth_fields and 'bio' in auth_fields:
-                    update_data_for_profile['bio'] = auth_fields['bio']
-    
-                profile = await self.profile_repo.update_profile(user_id, **update_data_for_profile)
-            else:
-                profile = await self.profile_repo.get_by_user_id(user_id)
+            profile = await self.profile_repo.update_profile(user_id, **update_data)
             
             if profile:
-                # Очищаем кэш
                 await self._clear_profile_cache(user_id)
-                
-                logger.debug(f"Обновлен профиль пользователя {user_id}")
+                logger.info(f"Обновлён профиль пользователя {user_id}: {list(update_data.keys())}")
             
             return profile
-            
+        
         except Exception as e:
             logger.error(f"Ошибка обновления профиля пользователя {user_id}: {e}")
             return None
@@ -442,28 +426,6 @@ class ProfileService:
         
         return full_profile
     
-    async def _increment_profile_views(
-        self, 
-        profile_user_id: int, 
-        viewer_user_id: int
-    ) -> Optional[UserProfile]:
-        """Увеличение счетчика просмотров профиля"""
-        try:
-            # Проверяем, что это не владелец профиля
-            if profile_user_id == viewer_user_id:
-                return None
-            
-            profile = await self.profile_repo.increment_profile_views(profile_user_id)
-            
-            if profile:
-                # Очищаем кэш после обновления
-                await self._clear_profile_cache(profile_user_id)
-            
-            return profile
-            
-        except Exception as e:
-            logger.error(f"Ошибка увеличения просмотров профиля {profile_user_id}: {e}")
-            return None
     
     async def _clear_profile_cache(self, user_id: int):
         """Очистка кэша профиля пользователя"""

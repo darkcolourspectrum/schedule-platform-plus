@@ -56,9 +56,7 @@ class Settings(BaseSettings):
     
     # Microservices URLs
     auth_service_url: str = Field("http://localhost:8000", env="AUTH_SERVICE_URL")
-    schedule_service_url: str = Field("http://localhost:8001", env="SCHEDULE_SERVICE_URL")
     auth_service_timeout: int = Field(30, env="AUTH_SERVICE_TIMEOUT")
-    schedule_service_timeout: int = Field(30, env="SCHEDULE_SERVICE_TIMEOUT")
     
     # Base URL для формирования ссылок
     base_url: str = Field("http://localhost:8080", env="BASE_URL")
@@ -74,18 +72,6 @@ class Settings(BaseSettings):
     
     # Cache TTL Settings (в секундах)
     cache_user_profile_ttl: int = Field(600, env="CACHE_USER_PROFILE_TTL")
-    cache_dashboard_ttl: int = Field(300, env="CACHE_DASHBOARD_TTL")
-    cache_comments_ttl: int = Field(180, env="CACHE_COMMENTS_TTL")
-    cache_activity_ttl: int = Field(3600, env="CACHE_ACTIVITY_TTL")
-    
-    # Dashboard Settings
-    max_recent_activities: int = Field(10, env="MAX_RECENT_ACTIVITIES")
-    max_upcoming_lessons: int = Field(5, env="MAX_UPCOMING_LESSONS")
-    dashboard_data_days_back: int = Field(30, env="DASHBOARD_DATA_DAYS_BACK")
-    
-    # Comment System Settings
-    max_comment_length: int = Field(1000, env="MAX_COMMENT_LENGTH")
-    allow_comment_editing_hours: int = Field(24, env="ALLOW_COMMENT_EDITING_HOURS")
     
     # Security
     jwt_secret_key: str = Field(..., env="JWT_SECRET_KEY")

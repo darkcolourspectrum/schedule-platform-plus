@@ -3,7 +3,7 @@ HTTP клиент для интеграции с Auth Service
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 import httpx
 from app.config import settings
 from sqlalchemy import select
@@ -91,131 +91,6 @@ class AuthServiceClient:
             return None
     
     
-    async def validate_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """
-        Валидация JWT токена через Auth Service
-        
-        ИСПРАВЛЕНО: Теперь отправляем токен в заголовке Authorization
-        
-        Args:
-            token: JWT токен
-            
-        Returns:
-            Dict с данными токена или None
-        """
-        try:
-            # ФИКС: Добавляем Bearer токен в заголовок Authorization
-            headers = {
-                **self.headers,  # Содержит X-Internal-API-Key
-                "Authorization": f"Bearer {token}"
-            }
-            
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/api/v1/auth/validate-token",
-                    headers=headers
-                )
-                
-                if response.status_code == 200:
-                    token_data = response.json()
-                    logger.debug(f"Токен валиден для пользователя {token_data.get('user_id')}")
-                    return token_data
-                else:
-                    logger.warning(f"Токен невалиден: {response.status_code} - {response.text}")
-                    return None
-                    
-        except httpx.ConnectError:
-            logger.error(f"Не удалось подключиться к Auth Service: {self.base_url}")
-            return None
-        except Exception as e:
-            logger.error(f"Ошибка при валидации токена: {e}")
-            return None
-    
-    async def get_user_permissions(self, user_id: int) -> List[str]:
-        """
-        Получение разрешений пользователя
-        
-        Args:
-            user_id: ID пользователя
-            
-        Returns:
-            List разрешений
-        """
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    f"{self.base_url}/api/v1/users/{user_id}/permissions",
-                    headers=self.headers
-                )
-                
-                if response.status_code == 200:
-                    permissions_data = response.json()
-                    logger.debug(f"Получены разрешения для пользователя {user_id}")
-                    return permissions_data.get("permissions", [])
-                else:
-                    logger.warning(f"Не удалось получить разрешения для пользователя {user_id}")
-                    return []
-                    
-        except Exception as e:
-            logger.error(f"Ошибка при получении разрешений пользователя {user_id}: {e}")
-            return []
-    
-    async def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """
-        Верификация токена (алиас для validate_token для обратной совместимости)
-        
-        Args:
-            token: JWT токен
-            
-        Returns:
-            Dict с данными пользователя или None
-        """
-        return await self.validate_token(token)
-    
-    async def update_user(self, user_id: int, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Обновление данных пользователя в Auth Service
-        
-        Args:
-            user_id: ID пользователя
-            update_data: Данные для обновления (first_name, last_name, phone, bio, avatar_url)
-            
-        Returns:
-            Dict с обновленными данными пользователя или None
-        """
-        try:
-            # Фильтруем только разрешенные поля для Auth Service
-            allowed_fields = ['first_name', 'last_name', 'phone', 'bio', 'avatar_url']
-            filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields and v is not None}
-            
-            if not filtered_data:
-                logger.debug(f"Нет данных для обновления в Auth Service для пользователя {user_id}")
-                return await self.get_user_by_id(user_id)
-            
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.put(
-                    f"{self.base_url}/api/v1/users/{user_id}/profile",
-                    headers=self.headers,
-                    json=filtered_data
-                )
-                
-                if response.status_code == 200:
-                    user_data = response.json()
-                    logger.info(f"Обновлены данные пользователя {user_id} в Auth Service: {list(filtered_data.keys())}")
-                    return user_data
-                elif response.status_code == 404:
-                    logger.warning(f"Пользователь {user_id} не найден в Auth Service")
-                    return None
-                else:
-                    logger.error(f"Ошибка обновления пользователя {user_id}: {response.status_code} - {response.text}")
-                    return None
-                    
-        except httpx.ConnectError:
-            logger.error(f"Не удалось подключиться к Auth Service: {self.base_url}")
-            return None
-        except Exception as e:
-            logger.error(f"Ошибка при обновлении пользователя {user_id}: {e}")
-            return None
     
     async def health_check(self) -> bool:
         """
