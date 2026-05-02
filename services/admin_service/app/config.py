@@ -26,14 +26,6 @@ class Settings(BaseSettings):
     database_user: str = Field("admin_user", env="DATABASE_USER")
     database_password: str = Field(..., env="DATABASE_PASSWORD")
     
-    # ===== AUTH SERVICE DATABASE (READ-ONLY) =====
-    auth_db_url: str = Field(..., env="AUTH_DB_URL")
-    auth_db_host: str = Field("localhost", env="AUTH_DB_HOST")
-    auth_db_port: int = Field(5432, env="AUTH_DB_PORT")
-    auth_db_name: str = Field("auth_service_db", env="AUTH_DB_NAME")
-    auth_db_user: str = Field("auth_user", env="AUTH_DB_USER")
-    auth_db_password: str = Field(..., env="AUTH_DB_PASSWORD")
-    
     # ===== REDIS SETTINGS =====
     redis_url: str = Field("redis://localhost:6379/3", env="REDIS_URL")
     redis_host: str = Field("localhost", env="REDIS_HOST")
@@ -41,6 +33,9 @@ class Settings(BaseSettings):
     redis_db: int = Field(3, env="REDIS_DB")
     jwt_blacklist_redis_url: str = Field("redis://localhost:6379/15", env="JWT_BLACKLIST_REDIS_URL")
     
+    # ===== RABBITMQ =====
+    rabbitmq_url: str = Field("amqp://guest:guest@rabbitmq:5672/", env="RABBITMQ_URL")
+
     # ===== CORS SETTINGS =====
     allowed_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:5173"],
@@ -100,13 +95,6 @@ class Settings(BaseSettings):
         if "+asyncpg" not in self.database_url:
             return self.database_url.replace("postgresql://", "postgresql+asyncpg://")
         return self.database_url
-    
-    @property
-    def auth_db_url_async(self) -> str:
-        """Асинхронный URL для Auth Service БД"""
-        if "+asyncpg" not in self.auth_db_url:
-            return self.auth_db_url.replace("postgresql://", "postgresql+asyncpg://")
-        return self.auth_db_url
     
     @property
     def is_production(self) -> bool:

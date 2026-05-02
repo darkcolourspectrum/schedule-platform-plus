@@ -6,7 +6,8 @@ from app.models.base import Base, TimestampMixin
 from app.models.recurring_pattern import RecurringPattern
 from app.models.lesson import Lesson
 from app.models.lesson_student import LessonStudent, RecurringPatternStudent
-from app.models.auth_models import User, Role
+from app.models.user_cache import UserCache
+from app.models.processed_event import ProcessedEvent
 
 __all__ = [
     "Base",
@@ -15,6 +16,6 @@ __all__ = [
     "Lesson",
     "LessonStudent",
     "RecurringPatternStudent",
-    "User",
-    "Role",
+    "UserCache", 
+    "ProcessedEvent"
 ]

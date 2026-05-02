@@ -1,268 +1,156 @@
 """
-User Cache Service - Кэширование User данных из Auth Service
+User Cache Service - чтение данных пользователей из локальной таблицы users_cache.
 
-ВАЖНО: Это КЛЮЧЕВОЙ сервис для убирания HTTP вызовов между сервисами!
+Источник данных: локальная таблица users_cache в Admin Service БД.
+Эта таблица синхронизируется с Auth Service через consumer событий 'auth_events'
+(см. app/messaging/auth_consumer.py и auth_handlers.py).
 
-Вместо HTTP запросов в Auth Service, мы:
-1. Проверяем Redis кэш
-2. Если нет в кэше - читаем напрямую из Auth Service БД (READ-ONLY)
-3. Кэшируем результат в Redis
+Для записи (изменение роли, активация, привязка к студии) использовать
+AuthServiceClient (HTTP-вызовы к Auth Service), а НЕ напрямую этот сервис.
 
-Преимущества:
-- Нет HTTP overhead
-- Данные всегда актуальные
-- Быстро (Redis)
-- Надёжно (нет зависимости от доступности HTTP API)
 """
 
 import logging
-from typing import Optional, Dict, Any, List
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from typing import Any, Dict, List, Optional
 
-from app.models.auth_models import User, Role
-from app.database.connection import AuthAsyncSessionLocal
-from app.database.redis_client import redis_client
-from app.config import settings
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database.connection import AdminAsyncSessionLocal
+from app.models.user_cache import UserCache
 
 logger = logging.getLogger(__name__)
 
 
+# Заглушки описаний ролей (их нет в users_cache - они хранятся в Auth Service).
+# Если в будущем потребуются в админке - получать через AuthServiceClient.
+
+
 class UserCacheService:
-    """
-    Сервис для получения User данных с кэшированием
-    
-    Workflow:
-    1. Проверяем Redis: user:{id}
-    2. Если нет → читаем из Auth Service БД
-    3. Кэшируем на 5 минут
-    4. Возвращаем данные
-    """
-    
-    def __init__(self):
-        self.cache_ttl = settings.cache_user_ttl
+    """Сервис чтения пользователей из локальной users_cache."""
     
     async def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Получить пользователя по ID с кэшированием
-        
-        Args:
-            user_id: ID пользователя
-            
-        Returns:
-            Словарь с данными пользователя или None
-        """
-        # 1. Проверяем Redis кэш
-        cache_key = f"user:{user_id}"
-        cached = await redis_client.get_json(cache_key)
-        
-        if cached:
-            logger.debug(f"User {user_id} loaded from cache")
-            return cached
-        
-        # 2. Читаем из Auth Service БД
-        logger.debug(f"User {user_id} not in cache, loading from Auth DB")
-        user_data = await self._get_user_from_auth_db(user_id)
-        
-        if not user_data:
-            logger.warning(f"User {user_id} not found in Auth DB")
-            return None
-        
-        # 3. Кэшируем результат
-        await redis_client.set_json(cache_key, user_data, self.cache_ttl)
-        logger.debug(f"User {user_id} cached for {self.cache_ttl}s")
-        
-        return user_data
+        """Получить пользователя по ID из локального кеша."""
+        async with AdminAsyncSessionLocal() as session:
+            user = await self._fetch_one(session, user_id)
+            if user is None:
+                return None
+            return self._user_to_dict(user)
     
     async def get_users_by_role(
         self,
         role_name: str,
-        is_active: Optional[bool] = None
+        is_active: Optional[bool] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Получить всех пользователей с определённой ролью
-        
-        Args:
-            role_name: Название роли (admin, teacher, student, guest)
-            is_active: Фильтр по активности (опционально)
+        """Получить пользователей с указанной ролью."""
+        async with AdminAsyncSessionLocal() as session:
+            stmt = select(UserCache).where(UserCache.role_name == role_name)
+            if is_active is not None:
+                stmt = stmt.where(UserCache.is_active == is_active)
+            stmt = stmt.order_by(UserCache.id)
             
-        Returns:
-            Список пользователей
-        """
-        # Кэшируем список пользователей по роли
-        cache_key = f"users:role:{role_name}:active:{is_active}"
-        cached = await redis_client.get_json(cache_key)
-        
-        if cached:
-            logger.debug(f"Users with role {role_name} loaded from cache")
-            return cached
-        
-        # Читаем из БД
-        logger.debug(f"Loading users with role {role_name} from Auth DB")
-        users_data = await self._get_users_by_role_from_db(role_name, is_active)
-        
-        # Кэшируем на 2 минуты (короче, т.к. список может меняться)
-        await redis_client.set_json(cache_key, users_data, 120)
-        
-        return users_data
+            result = await session.execute(stmt)
+            users = list(result.scalars().all())
+            return [self._user_to_dict(u) for u in users]
     
     async def get_users_by_studio(
         self,
         studio_id: int,
-        role_name: Optional[str] = None
+        role_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Получить всех пользователей студии
-        
-        Args:
-            studio_id: ID студии
-            role_name: Фильтр по роли (опционально)
+        """Получить всех пользователей студии."""
+        async with AdminAsyncSessionLocal() as session:
+            stmt = select(UserCache).where(UserCache.studio_id == studio_id)
+            if role_name:
+                stmt = stmt.where(UserCache.role_name == role_name)
+            stmt = stmt.order_by(UserCache.id)
             
-        Returns:
-            Список пользователей
-        """
-        cache_key = f"users:studio:{studio_id}:role:{role_name}"
-        cached = await redis_client.get_json(cache_key)
-        
-        if cached:
-            return cached
-        
-        users_data = await self._get_users_by_studio_from_db(studio_id, role_name)
-        await redis_client.set_json(cache_key, users_data, 120)
-        
-        return users_data
+            result = await session.execute(stmt)
+            users = list(result.scalars().all())
+            return [self._user_to_dict(u) for u in users]
     
-    async def invalidate_user_cache(self, user_id: int):
-        """
-        Инвалидация кэша пользователя
-        
-        Вызывается когда User обновился в Auth Service
-        """
-        cache_key = f"user:{user_id}"
-        deleted = await redis_client.delete(cache_key)
-        
-        if deleted:
-            logger.info(f"User {user_id} cache invalidated")
-        
-        # Также инвалидируем списки пользователей
-        await redis_client.clear_pattern("users:*")
-    
-    async def invalidate_all_users_cache(self):
-        """Инвалидация кэша всех пользователей"""
-        deleted = await redis_client.clear_pattern("user:*")
-        await redis_client.clear_pattern("users:*")
-        logger.info(f"All users cache invalidated ({deleted} keys)")
-    
-    # ========== ПРИВАТНЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С БД ==========
-    
-    async def _get_user_from_auth_db(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Читаем пользователя из Auth Service БД (READ-ONLY)
-        
-        ВАЖНО: Только чтение! Не модифицируем!
-        """
-        async with AuthAsyncSessionLocal() as session:
-            try:
-                stmt = (
-                    select(User)
-                    .where(User.id == user_id)
-                    .options(selectinload(User.role))
-                )
-                
-                result = await session.execute(stmt)
-                user = result.scalar_one_or_none()
-                
-                if not user:
-                    return None
-                
-                return self._user_to_dict(user)
-                
-            except Exception as e:
-                logger.error(f"Error reading user {user_id} from Auth DB: {e}")
-                return None
-    
-    async def _get_users_by_role_from_db(
+    async def get_all_users(
         self,
-        role_name: str,
-        is_active: Optional[bool] = None
+        limit: int = 50,
+        offset: int = 0,
+        role_name: Optional[str] = None,
+        studio_id: Optional[int] = None,
+        is_active: Optional[bool] = None,
     ) -> List[Dict[str, Any]]:
-        """Читаем пользователей по роли из Auth Service БД"""
-        async with AuthAsyncSessionLocal() as session:
-            try:
-                stmt = (
-                    select(User)
-                    .join(User.role)
-                    .where(Role.name == role_name)
-                    .options(selectinload(User.role))
-                )
-                
-                # Фильтр по активности
-                if is_active is not None:
-                    stmt = stmt.where(User.is_active == is_active)
-                
-                result = await session.execute(stmt)
-                users = result.scalars().all()
-                
-                return [self._user_to_dict(user) for user in users]
-                
-            except Exception as e:
-                logger.error(f"Error reading users with role {role_name} from Auth DB: {e}")
-                return []
+        """Получить пользователей с фильтрами и пагинацией."""
+        async with AdminAsyncSessionLocal() as session:
+            stmt = select(UserCache)
+            if role_name:
+                stmt = stmt.where(UserCache.role_name == role_name)
+            if studio_id is not None:
+                stmt = stmt.where(UserCache.studio_id == studio_id)
+            if is_active is not None:
+                stmt = stmt.where(UserCache.is_active == is_active)
+            stmt = stmt.order_by(UserCache.id).limit(limit).offset(offset)
+            
+            result = await session.execute(stmt)
+            users = list(result.scalars().all())
+            return [self._user_to_dict(u) for u in users]
     
-    async def _get_users_by_studio_from_db(
+    async def count_users(
         self,
-        studio_id: int,
-        role_name: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """Читаем пользователей студии из Auth Service БД"""
-        async with AuthAsyncSessionLocal() as session:
-            try:
-                stmt = (
-                    select(User)
-                    .where(User.studio_id == studio_id)
-                    .options(selectinload(User.role))
-                )
-                
-                # Фильтр по роли
-                if role_name:
-                    stmt = stmt.join(User.role).where(Role.name == role_name)
-                
-                result = await session.execute(stmt)
-                users = result.scalars().all()
-                
-                return [self._user_to_dict(user) for user in users]
-                
-            except Exception as e:
-                logger.error(f"Error reading users for studio {studio_id} from Auth DB: {e}")
-                return []
-    
-    def _user_to_dict(self, user: User) -> Dict[str, Any]:
-        """
-        Конвертируем User SQLAlchemy объект в словарь
+        role_name: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> int:
+        """Посчитать пользователей с фильтрами (для dashboard-статистики)."""
+        from sqlalchemy import func
         
-        ВАЖНО: Это единственное место где мы формируем структуру User данных
+        async with AdminAsyncSessionLocal() as session:
+            stmt = select(func.count(UserCache.id))
+            if role_name:
+                stmt = stmt.where(UserCache.role_name == role_name)
+            if is_active is not None:
+                stmt = stmt.where(UserCache.is_active == is_active)
+            
+            result = await session.execute(stmt)
+            return result.scalar() or 0
+    
+    async def _fetch_one(
+        self,
+        session: AsyncSession,
+        user_id: int,
+    ) -> Optional[UserCache]:
+        result = await session.execute(
+            select(UserCache).where(UserCache.id == user_id)
+        )
+        return result.scalar_one_or_none()
+    
+    def _user_to_dict(self, user: UserCache) -> Dict[str, Any]:
+        """
+        Конвертировать UserCache в словарь, совместимый с прежним API.
+        
+        Сохраняем структуру 'role' как вложенный объект, чтобы не ломать
+        существующие Pydantic-схемы в админке.
         """
         return {
             "id": user.id,
             "email": user.email,
             "first_name": user.first_name,
             "last_name": user.last_name,
-            "full_name": user.full_name,
+            "full_name": f"{user.first_name} {user.last_name}".strip(),
             "phone": user.phone,
-            "role": {
-                "id": user.role.id,
-                "name": user.role.name,
-                "description": user.role.description
-            } if user.role else None,
+            "role_id": user.role_id,
+            "role": user.role_name,
             "studio_id": user.studio_id,
             "is_active": user.is_active,
             "is_verified": user.is_verified,
-            "is_locked": user.is_locked,
-            "login_attempts": user.login_attempts,
-            "last_login": user.last_login.isoformat() if user.last_login else None,
-            "created_at": user.created_at.isoformat() if user.created_at else None,
+            # Поля, которых нет в users_cache: возвращаем None/0, чтобы не
+            # ломать схемы. Эти поля используются дашбордом и user_management:
+            # их нужно либо получать через AuthServiceClient, либо признать,
+            # что в admin они не критичны (login_attempts, last_login и т.п.).
+            "is_locked": False,
+            "login_attempts": 0,
+            "locked_until": None,
+            "last_login": None,
+            "created_at": user.synced_at.isoformat() if user.synced_at else None,
             "updated_at": user.updated_at.isoformat() if user.updated_at else None,
-            "privacy_policy_accepted": user.privacy_policy_accepted
+            "privacy_policy_accepted": True,
+            "privacy_policy_accepted_at": None,
         }
 
 

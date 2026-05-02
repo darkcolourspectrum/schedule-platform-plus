@@ -8,7 +8,17 @@ from app.dependencies import (
     verify_internal_api_key
 )
 from app.services.user_service import UserService
-from app.schemas.user import UserProfile, UserListItem, UserUpdate
+from app.schemas.user import (
+    UserProfile,
+    UserListItem,
+    UserUpdate,
+    UserRoleUpdateRequest,
+    UserStudioAssignRequest,
+)
+from app.repositories.role_repository import RoleRepository
+from app.database.connection import get_async_session
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.exceptions import UserNotFoundException
 from app.models.user import User
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -120,4 +130,93 @@ async def update_user_profile_internal(
         update_data=profile_data
     )
     
+    return UserProfile.from_orm(updated_user)
+
+@router.put(
+    "/{user_id}/role",
+    response_model=UserProfile,
+    summary="Изменение роли пользователя (внутренний endpoint)",
+    description="Доступно только для внутренних сервисов с X-Internal-API-Key"
+)
+async def change_user_role_internal(
+    user_id: int,
+    request: UserRoleUpdateRequest,
+    internal_key_valid: bool = Depends(verify_internal_api_key),
+    user_service: UserService = Depends(get_user_service),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """
+    Изменение роли пользователя по имени роли.
+    Публикует событие role.changed в outbox.
+    """
+    role_repo = RoleRepository(db)
+    role = await role_repo.get_by_name(request.role)
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Role '{request.role}' not found",
+        )
+    
+    updated_user = await user_service.change_user_role(
+        user_id=user_id,
+        new_role_id=role.id,
+    )
+    return UserProfile.from_orm(updated_user)
+
+
+@router.put(
+    "/{user_id}/studio",
+    response_model=UserProfile,
+    summary="Привязка пользователя к студии (внутренний endpoint)",
+    description="Доступно только для внутренних сервисов с X-Internal-API-Key"
+)
+async def assign_user_to_studio_internal(
+    user_id: int,
+    request: UserStudioAssignRequest,
+    internal_key_valid: bool = Depends(verify_internal_api_key),
+    user_service: UserService = Depends(get_user_service),
+):
+    """
+    Привязка пользователя к студии. Публикует событие user.updated в outbox.
+    """
+    updated_user = await user_service.assign_user_to_studio(
+        user_id=user_id,
+        studio_id=request.studio_id,
+    )
+    return UserProfile.from_orm(updated_user)
+
+
+@router.post(
+    "/{user_id}/activate",
+    response_model=UserProfile,
+    summary="Активация пользователя (внутренний endpoint)",
+    description="Доступно только для внутренних сервисов с X-Internal-API-Key"
+)
+async def activate_user_internal(
+    user_id: int,
+    internal_key_valid: bool = Depends(verify_internal_api_key),
+    user_service: UserService = Depends(get_user_service),
+):
+    """
+    Активация пользователя. Публикует событие user.updated в outbox.
+    """
+    updated_user = await user_service.activate_user(user_id)
+    return UserProfile.from_orm(updated_user)
+
+
+@router.post(
+    "/{user_id}/deactivate",
+    response_model=UserProfile,
+    summary="Деактивация пользователя (внутренний endpoint)",
+    description="Доступно только для внутренних сервисов с X-Internal-API-Key"
+)
+async def deactivate_user_internal(
+    user_id: int,
+    internal_key_valid: bool = Depends(verify_internal_api_key),
+    user_service: UserService = Depends(get_user_service),
+):
+    """
+    Деактивация пользователя. Публикует событие user.deactivated в outbox.
+    """
+    updated_user = await user_service.deactivate_user(user_id)
     return UserProfile.from_orm(updated_user)

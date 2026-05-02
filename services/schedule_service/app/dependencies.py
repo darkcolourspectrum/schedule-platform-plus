@@ -7,7 +7,7 @@ from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.connection import get_schedule_db, get_auth_db
+from app.database.connection import get_schedule_db
 from app.repositories.recurring_pattern_repository import RecurringPatternRepository
 from app.repositories.lesson_repository import LessonRepository
 from app.repositories.user_repository import UserRepository
@@ -29,12 +29,6 @@ async def get_db() -> AsyncSession:
         yield session
 
 
-async def get_auth_session() -> AsyncSession:
-    """Get Auth Service database session (READ-ONLY)"""
-    async for session in get_auth_db():
-        yield session
-
-
 # ========== REPOSITORY DEPENDENCIES ==========
 
 async def get_pattern_repository(
@@ -52,10 +46,10 @@ async def get_lesson_repository(
 
 
 async def get_user_repository(
-    auth_db: AsyncSession = Depends(get_auth_session)
+    db: AsyncSession = Depends(get_db)
 ) -> UserRepository:
-    """Get UserRepository"""
-    return UserRepository(auth_db)
+    """Get UserRepository (читает из локального users_cache)"""
+    return UserRepository(db)
 
 
 # ========== SERVICE DEPENDENCIES ==========

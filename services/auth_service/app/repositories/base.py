@@ -1,4 +1,22 @@
-from typing import TypeVar, Generic, Type, Optional, List, Any, Dict
+"""
+Базовый репозиторий для Auth Service.
+
+Транзакционная политика:
+    Репозиторий НЕ управляет транзакциями. Все методы используют flush()
+    вместо commit(), чтобы изменения становились видны в текущей сессии,
+    но фиксация откладывалась до явного commit() от сервисного слоя.
+
+    Это реализация паттерна Unit of Work: одна сервисная операция =
+    одна транзакция, в которую могут входить несколько репозиторных вызовов
+    плюс запись в outbox-таблицу.
+
+    Сервисный слой обязан:
+        - вызывать await session.commit() после успешного завершения операции
+        - ловить исключения и вызывать await session.rollback() (либо полагаться
+          на rollback в FastAPI dependency get_async_session)
+"""
+
+from typing import TypeVar, Generic, Type, Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.orm import selectinload
@@ -56,7 +74,6 @@ class BaseRepository(Generic[ModelType]):
         """Получение всех записей с фильтрами"""
         query = select(self.model)
         
-        # Применяем фильтры
         for field, value in filters.items():
             if hasattr(self.model, field):
                 query = query.where(getattr(self.model, field) == value)
@@ -75,10 +92,15 @@ class BaseRepository(Generic[ModelType]):
         return result.scalars().all()
     
     async def create(self, **data) -> ModelType:
-        """Создание новой записи"""
+        """
+        Создание новой записи.
+        
+        Делает flush() для получения id и проверки constraints, но НЕ коммитит.
+        Commit обязан сделать вызывающий сервисный код.
+        """
         instance = self.model(**data)
         self.db.add(instance)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(instance)
         return instance
     
@@ -87,7 +109,13 @@ class BaseRepository(Generic[ModelType]):
         id: Any, 
         **data
     ) -> Optional[ModelType]:
-        """Обновление записи по ID"""
+        """
+        Обновление записи по ID.
+        
+        Делает flush(), но НЕ коммитит. Commit обязан сделать сервисный код.
+        Возвращает обновлённый объект (через RETURNING), либо None если запись
+        с указанным id не найдена.
+        """
         query = (
             update(self.model)
             .where(self.model.id == id)
@@ -96,14 +124,18 @@ class BaseRepository(Generic[ModelType]):
         )
         
         result = await self.db.execute(query)
-        await self.db.commit()
+        await self.db.flush()
         return result.scalar_one_or_none()
     
     async def delete(self, id: Any) -> bool:
-        """Удаление записи по ID"""
+        """
+        Удаление записи по ID.
+        
+        Делает flush(), но НЕ коммитит. Commit обязан сделать сервисный код.
+        """
         query = delete(self.model).where(self.model.id == id)
         result = await self.db.execute(query)
-        await self.db.commit()
+        await self.db.flush()
         return result.rowcount > 0
     
     async def exists(self, **filters) -> bool:

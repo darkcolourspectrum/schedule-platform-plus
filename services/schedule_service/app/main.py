@@ -12,6 +12,7 @@ from app.api.v1.router import api_router
 from app.database.redis_client import redis_client
 
 from app.messaging import publisher
+from app.messaging.auth_consumer import consumer as auth_consumer
 
 # Настройка логирования
 logging.basicConfig(
@@ -33,10 +34,17 @@ async def lifespan(app: FastAPI):
     await redis_client.connect()
     await publisher.connect()
     
+    try:
+        await auth_consumer.start()
+    except Exception as exc:
+        logger.error("Failed to start auth event consumer: %s", exc)
+        raise
+
     yield
     
     # Shutdown
     logger.info("Shutting down...")
+    await auth_consumer.stop()
     await publisher.close()
     await redis_client.disconnect()
 

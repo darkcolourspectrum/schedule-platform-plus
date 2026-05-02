@@ -18,6 +18,9 @@ from app.database.connection import test_database_connection, close_database_con
 from app.database.redis_client import redis_client
 from app.api.router import api_router
 
+from app.database.connection import create_async_session_factory
+from app.messaging.publisher_worker import init_worker
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO if settings.debug else logging.WARNING,
@@ -59,10 +62,26 @@ async def lifespan(app: FastAPI):
     
     logger.info("✅ Приложение успешно запущено!")
     
+    # Запуск outbox-publisher воркера
+    try:
+        logger.info("Запуск outbox publisher воркера...")
+        outbox_worker = init_worker(create_async_session_factory())
+        await outbox_worker.start()
+        logger.info("Outbox publisher воркер запущен")
+    except Exception as e:
+        logger.error(f"Не удалось запустить outbox publisher воркер: {e}")
+        raise
+
     yield  # Приложение работает
     
     # Shutdown
     logger.info("🔄 Завершение работы приложения...")
+    
+    # Остановка outbox-publisher воркера
+    from app.messaging.publisher_worker import worker as outbox_worker
+    if outbox_worker is not None:
+        await outbox_worker.stop()
+
     await close_database_connections()
     await redis_client.disconnect()
     logger.info("👋 Приложение завершено")

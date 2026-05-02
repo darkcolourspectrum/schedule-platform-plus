@@ -23,6 +23,10 @@ from app.repositories.user_repository import (
 from app.repositories.role_repository import RoleRepository
 from app.services.redis_blacklist_service import RedisBlacklistService
 from app.services.redis_rate_limiter import AuthRateLimiter
+from app.messaging.outbox import (
+    record_user_created,
+    record_user_deactivated,
+)
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
 from app.config import settings
@@ -79,36 +83,46 @@ class AuthService:
         if not student_role:
             raise Exception("Default student role not found")
         
-        # Создание пользователя
-        hashed_password = self.security.hash_password(password)
-        user = await self.user_repo.create_user(
-            email=email,
-            first_name=first_name,
-            last_name=last_name,
-            role_id=student_role.id,
-            hashed_password=hashed_password,
-            phone=phone,
-            privacy_policy_accepted=privacy_policy_accepted
-        )
-        
-        # Создание токенов
-        tokens = create_tokens_for_user(
-            user_id=user.id,
-            email=user.email,
-            role=student_role.name,
-            studio_id=user.studio_id
-        )
-        
-        # Сохранение refresh токена
-        refresh_expires_at = datetime.utcnow() + timedelta(
-            days=settings.jwt_refresh_token_expire_days
-        )
-        
-        await self.refresh_token_repo.create_refresh_token(
-            user_id=user.id,
-            token=tokens["refresh_token"],
-            expires_at=refresh_expires_at
-        )
+        try:
+            # Создание пользователя (flush -> id есть, но без commit)
+            hashed_password = self.security.hash_password(password)
+            user = await self.user_repo.create_user(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                role_id=student_role.id,
+                hashed_password=hashed_password,
+                phone=phone,
+                privacy_policy_accepted=privacy_policy_accepted
+            )
+            
+            # Создание токенов
+            tokens = create_tokens_for_user(
+                user_id=user.id,
+                email=user.email,
+                role=student_role.name,
+                studio_id=user.studio_id
+            )
+            
+            # Сохранение refresh токена (без commit)
+            refresh_expires_at = datetime.utcnow() + timedelta(
+                days=settings.jwt_refresh_token_expire_days
+            )
+            await self.refresh_token_repo.create_refresh_token(
+                user_id=user.id,
+                token=tokens["refresh_token"],
+                expires_at=refresh_expires_at
+            )
+            
+            # Запись события в outbox в той же транзакции
+            await record_user_created(self.db, user, role_name=student_role.name)
+            
+            # Атомарный commit: пользователь + refresh-токен + outbox-событие
+            await self.db.commit()
+            
+        except Exception:
+            await self.db.rollback()
+            raise
         
         logger.info(f"User registered: {email} from IP {ip_address}")
         
@@ -120,7 +134,7 @@ class AuthService:
                 "last_name": user.last_name,
                 "role": student_role.name,
                 "studio_id": user.studio_id,
-                "studio_name": None,  # Studio relationship удалён
+                "studio_name": None,
                 "is_active": user.is_active,
                 "is_verified": user.is_verified
             },
@@ -153,40 +167,56 @@ class AuthService:
         
         # Проверка пароля
         if not self.security.verify_password(password, user.hashed_password):
-            # Увеличиваем счетчик неудачных попыток
-            await self.user_repo.increment_login_attempts(user.id)
-            
-            # Проверяем лимит попыток
-            if user.login_attempts >= 5:  # После 5 попыток блокируем
-                await self.user_repo.lock_user_account(user.id, lock_duration_minutes=30)
+            try:
+                # Увеличиваем счетчик неудачных попыток
+                await self.user_repo.increment_login_attempts(user.id)
+                
+                # После 5 попыток блокируем аккаунт + публикуем событие деактивации
+                if user.login_attempts + 1 >= 5:
+                    await self.user_repo.lock_user_account(user.id, lock_duration_minutes=30)
+                    await record_user_deactivated(
+                        self.db,
+                        user_id=user.id,
+                        reason="locked_too_many_failed_logins"
+                    )
+                
+                await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+                raise
             
             raise InvalidCredentialsException()
         
-        # Сброс счетчика попыток при успешном входе
-        await self.user_repo.reset_login_attempts(user.id)
-        await self.user_repo.update_last_login(user.id)
-        
-        # Создание токенов
-        tokens = create_tokens_for_user(
-            user_id=user.id,
-            email=user.email,
-            role=user.role.name,
-            studio_id=user.studio_id
-        )
-        
-        # Сохранение refresh токена
-        refresh_expires_at = datetime.utcnow() + timedelta(
-            days=settings.jwt_refresh_token_expire_days
-        )
-        
-        await self.refresh_token_repo.create_refresh_token(
-            user_id=user.id,
-            token=tokens["refresh_token"],
-            expires_at=refresh_expires_at,
-            device_info=device_info,
-            ip_address=ip_address,
-            user_agent=user_agent
-        )
+        try:
+            # Сброс счетчика попыток при успешном входе
+            await self.user_repo.reset_login_attempts(user.id)
+            await self.user_repo.update_last_login(user.id)
+            
+            # Создание токенов
+            tokens = create_tokens_for_user(
+                user_id=user.id,
+                email=user.email,
+                role=user.role.name,
+                studio_id=user.studio_id
+            )
+            
+            # Сохранение refresh токена
+            refresh_expires_at = datetime.utcnow() + timedelta(
+                days=settings.jwt_refresh_token_expire_days
+            )
+            await self.refresh_token_repo.create_refresh_token(
+                user_id=user.id,
+                token=tokens["refresh_token"],
+                expires_at=refresh_expires_at,
+                device_info=device_info,
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+            
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
         
         return {
             "user": {
@@ -196,7 +226,7 @@ class AuthService:
                 "last_name": user.last_name,
                 "role": user.role.name,
                 "studio_id": user.studio_id,
-                "studio_name": None,  # Studio relationship удалён
+                "studio_name": None,
                 "is_active": user.is_active,
                 "is_verified": user.is_verified
             },
@@ -228,7 +258,7 @@ class AuthService:
         if not user.is_active:
             raise UserInactiveException()
         
-        # Создание нового access токена
+        # Создание нового access токена (read-only операция, commit не нужен)
         tokens = create_tokens_for_user(
             user_id=user.id,
             email=user.email,
@@ -248,10 +278,15 @@ class AuthService:
     ) -> Dict[str, str]:
         """Выход пользователя из системы с Redis blacklist"""
         
-        # Отзыв refresh токена
-        await self.refresh_token_repo.revoke_token(refresh_token)
+        try:
+            # Отзыв refresh токена
+            await self.refresh_token_repo.revoke_token(refresh_token)
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
         
-        # Добавление access токена в blacklist через Redis
+        # Добавление access токена в blacklist через Redis (отдельная подсистема)
         if access_token:
             token_jti = self.security.get_token_jti(access_token)
             if token_jti:
@@ -259,7 +294,6 @@ class AuthService:
                 if token_payload:
                     expires_at = datetime.utcfromtimestamp(token_payload["exp"])
                     
-                    # Используем Redis blacklist сервис
                     await self.redis_blacklist.add_token_to_blacklist(
                         token_jti=token_jti,
                         token_type="access",
@@ -275,8 +309,13 @@ class AuthService:
     async def logout_all_devices(self, user_id: int) -> Dict[str, str]:
         """Выход пользователя со всех устройств с очисткой кеша"""
         
-        # Отзыв всех refresh токенов пользователя
-        revoked_count = await self.refresh_token_repo.revoke_user_tokens(user_id)
+        try:
+            # Отзыв всех refresh токенов пользователя
+            revoked_count = await self.refresh_token_repo.revoke_user_tokens(user_id)
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
         
         # Инвалидация кеша токенов пользователя
         await self.redis_blacklist.invalidate_user_tokens_cache(user_id)
@@ -305,7 +344,7 @@ class AuthService:
         if token_payload.is_expired:
             raise InvalidTokenException()
         
-        # Проверка blacklist через Redis (быстро!)
+        # Проверка blacklist через Redis
         if await self.redis_blacklist.is_token_blacklisted(token_payload.jti):
             raise TokenBlacklistedException()
         
@@ -316,7 +355,7 @@ class AuthService:
         
         user = await self.user_repo.get_by_id(
             token_payload.user_id,
-            relationships=["role"]  # УБРАЛ "studio"
+            relationships=["role"]
         )
         
         if not user:
@@ -330,9 +369,14 @@ class AuthService:
     async def cleanup_expired_tokens(self) -> Dict[str, int]:
         """Очистка истекших токенов и записей blacklist"""
         
-        # Очистка БД
-        expired_refresh_tokens = await self.refresh_token_repo.cleanup_expired_tokens()
-        expired_blacklist_records = await self.blacklist_repo.cleanup_expired_blacklist()
+        try:
+            # Очистка БД
+            expired_refresh_tokens = await self.refresh_token_repo.cleanup_expired_tokens()
+            expired_blacklist_records = await self.blacklist_repo.cleanup_expired_blacklist()
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
         
         # Очистка Redis кеша
         expired_cache_records = await self.redis_blacklist.cleanup_expired_cache()

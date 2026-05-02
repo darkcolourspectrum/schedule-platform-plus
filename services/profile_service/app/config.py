@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     redis_db: int = Field(2, env="REDIS_DB")
     jwt_blacklist_redis_url: str = Field("redis://localhost:6379/15", env="JWT_BLACKLIST_REDIS_URL")
     
+    # JWT (для shared/auth_lib)
+    jwt_secret_key: str = Field(..., env="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field("HS256", env="JWT_ALGORITHM")
+    
+    # Internal API Key (межсервисная аутентификация)
+    internal_api_key: str = Field(..., env="INTERNAL_API_KEY")
+
+    # RabbitMQ
+    rabbitmq_url: str = Field("amqp://guest:guest@rabbitmq:5672/", env="RABBITMQ_URL")
+
     # CORS
     allowed_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080"],

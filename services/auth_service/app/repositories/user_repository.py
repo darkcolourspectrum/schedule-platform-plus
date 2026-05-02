@@ -1,6 +1,6 @@
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta
 
@@ -122,8 +122,6 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
     
     async def get_by_token(self, token: str) -> Optional[RefreshToken]:
         """Получение refresh токена по значению с предзагрузкой user и role"""
-        from sqlalchemy.orm import selectinload
-        
         query = select(RefreshToken).where(RefreshToken.token == token).options(
             selectinload(RefreshToken.user).selectinload(User.role)
         )
@@ -132,7 +130,11 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
         return result.scalar_one_or_none()
     
     async def revoke_token(self, token: str) -> bool:
-        """Отзыв refresh токена"""
+        """
+        Отзыв refresh токена.
+        
+        Не коммитит транзакцию: commit обязан сделать сервисный слой.
+        """
         query = (
             update(RefreshToken)
             .where(RefreshToken.token == token)
@@ -140,11 +142,15 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
         )
         
         result = await self.db.execute(query)
-        await self.db.commit()
+        await self.db.flush()
         return result.rowcount > 0
     
     async def revoke_user_tokens(self, user_id: int) -> int:
-        """Отзыв всех токенов пользователя"""
+        """
+        Отзыв всех токенов пользователя.
+        
+        Не коммитит транзакцию: commit обязан сделать сервисный слой.
+        """
         query = (
             update(RefreshToken)
             .where(RefreshToken.user_id == user_id)
@@ -152,16 +158,18 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
         )
         
         result = await self.db.execute(query)
-        await self.db.commit()
+        await self.db.flush()
         return result.rowcount
     
     async def cleanup_expired_tokens(self) -> int:
-        """Очистка истекших токенов"""
-        from sqlalchemy import delete
+        """
+        Очистка истекших токенов.
         
+        Не коммитит транзакцию: commit обязан сделать сервисный слой.
+        """
         query = delete(RefreshToken).where(RefreshToken.expires_at < datetime.utcnow())
         result = await self.db.execute(query)
-        await self.db.commit()
+        await self.db.flush()
         return result.rowcount
 
 
@@ -193,10 +201,12 @@ class TokenBlacklistRepository(BaseRepository[TokenBlacklist]):
         return await self.exists(token_jti=token_jti)
     
     async def cleanup_expired_blacklist(self) -> int:
-        """Очистка истекших записей из черного списка"""
-        from sqlalchemy import delete
+        """
+        Очистка истекших записей из черного списка.
         
+        Не коммитит транзакцию: commit обязан сделать сервисный слой.
+        """
         query = delete(TokenBlacklist).where(TokenBlacklist.expires_at < datetime.utcnow())
         result = await self.db.execute(query)
-        await self.db.commit()
+        await self.db.flush()
         return result.rowcount

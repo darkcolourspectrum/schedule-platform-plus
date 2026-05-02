@@ -108,6 +108,8 @@ services:
       dockerfile: services/auth_service/Dockerfile
     container_name: auth_service
     restart: always
+    volumes:
+      - ./services/auth_service/migrations:/app/migrations
     environment:
       # Database
       DATABASE_HOST: postgres
@@ -116,7 +118,8 @@ services:
       DATABASE_USER: postgres
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/auth_service_db
-      
+      RABBITMQ_URL: ${RABBITMQ_URL}
+
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -177,7 +180,8 @@ services:
       DATABASE_USER: postgres
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/profile_service_db
-      
+      RABBITMQ_URL: ${RABBITMQ_URL}
+
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -218,12 +222,15 @@ services:
       - "8002:8002"
     volumes:
       - avatar_uploads:/app/static/avatars
+      - ./services/profile_service/migrations:/app/migrations
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       auth-service:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     # ✅ АВТОМАТИЧЕСКИЕ МИГРАЦИИ
     command: >
@@ -249,6 +256,8 @@ services:
       dockerfile: services/schedule_service/Dockerfile
     container_name: schedule_service
     restart: always
+    volumes:
+      - ./services/schedule_service/migrations:/app/migrations
     environment:
       # Application Settings
       APP_NAME: Schedule Service
@@ -265,15 +274,7 @@ services:
       DATABASE_USER: postgres
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/schedule_service_db
-      
-      # Auth Service Database (READ-ONLY для User данных)
-      AUTH_DB_HOST: postgres
-      AUTH_DB_PORT: 5432
-      AUTH_DB_NAME: auth_service_db
-      AUTH_DB_USER: postgres
-      AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      AUTH_DB_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/auth_service_db
-      
+
       # Redis (DB 4 для Schedule Service)
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -334,6 +335,8 @@ services:
       dockerfile: services/admin_service/Dockerfile
     container_name: admin_service
     restart: always
+    volumes:
+      - ./services/admin_service/migrations:/app/migrations
     environment:
       # Database (Admin Service own DB)
       DATABASE_HOST: postgres
@@ -342,14 +345,7 @@ services:
       DATABASE_USER: postgres
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/admin_service_db
-      
-      # Auth Service Database (READ-ONLY)
-      AUTH_DB_HOST: postgres
-      AUTH_DB_PORT: 5432
-      AUTH_DB_NAME: auth_service_db
-      AUTH_DB_USER: postgres
-      AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      AUTH_DB_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/auth_service_db
+      RABBITMQ_URL: ${RABBITMQ_URL}
       
       # Redis (DB 3 для Admin Service)
       REDIS_HOST: redis
@@ -393,6 +389,8 @@ services:
       redis:
         condition: service_healthy
       auth-service:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     # АВТОМАТИЧЕСКИЕ МИГРАЦИИ
     command: >

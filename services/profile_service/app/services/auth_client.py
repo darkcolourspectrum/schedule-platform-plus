@@ -6,6 +6,9 @@ import logging
 from typing import Optional, List, Dict, Any
 import httpx
 from app.config import settings
+from sqlalchemy import select
+from app.database.connection import AsyncSessionLocal
+from app.models.user_cache import UserCache
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +26,44 @@ class AuthServiceClient:
     
     async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
-        Получение пользователя по ID
+        Получение пользователя по ID.
         
-        Args:
-            user_id: ID пользователя
-            
-        Returns:
-            Dict с данными пользователя или None
+        Сначала читаем из локального users_cache (быстро, не зависит
+        от доступности Auth Service). Если в кеше нет - fallback на HTTP-вызов
+        Auth Service. Это редкий случай: либо пользователь только что создан
+        и событие user.created ещё не дошло, либо что-то рассинхронизировалось.
         """
+        # 1. Чтение из локального кеша
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(UserCache).where(UserCache.id == user_id)
+                )
+                cached = result.scalar_one_or_none()
+        except Exception as exc:
+            logger.error(f"Ошибка чтения users_cache для user_id={user_id}: {exc}")
+            cached = None
+        
+        if cached is not None:
+            return {
+                "id": cached.id,
+                "email": cached.email,
+                "first_name": cached.first_name,
+                "last_name": cached.last_name,
+                "phone": cached.phone,
+                "role": {
+                    "id": cached.role_id,
+                    "name": cached.role_name,
+                },
+                "studio_id": cached.studio_id,
+                "is_active": cached.is_active,
+                "is_verified": cached.is_verified,
+            }
+        
+        # 2. Fallback: HTTP к Auth Service
+        logger.warning(
+            f"User {user_id} not in users_cache, falling back to Auth HTTP"
+        )
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
@@ -39,15 +72,15 @@ class AuthServiceClient:
                 )
                 
                 if response.status_code == 200:
-                    user_data = response.json()
-                    logger.info(f"Auth Service вернул пользователя {user_id}: bio='{user_data.get('bio')}', first_name='{user_data.get('first_name')}'")
-                    logger.debug(f"Получен пользователь {user_id}: {user_data.get('email')}")
-                    return user_data
+                    return response.json()
                 elif response.status_code == 404:
                     logger.warning(f"Пользователь {user_id} не найден в Auth Service")
                     return None
                 else:
-                    logger.error(f"Ошибка получения пользователя {user_id}: {response.status_code} - {response.text}")
+                    logger.error(
+                        f"Ошибка получения пользователя {user_id}: "
+                        f"{response.status_code} - {response.text}"
+                    )
                     return None
                     
         except httpx.ConnectError:
@@ -57,35 +90,6 @@ class AuthServiceClient:
             logger.error(f"Ошибка при получении пользователя {user_id}: {e}")
             return None
     
-    async def get_users_by_role(self, role: str) -> List[Dict[str, Any]]:
-        """
-        Получение пользователей по роли
-        
-        Args:
-            role: Роль пользователя (admin, teacher, student)
-            
-        Returns:
-            List пользователей
-        """
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    f"{self.base_url}/api/v1/users/",
-                    headers=self.headers,
-                    params={"role": role}
-                )
-                
-                if response.status_code == 200:
-                    users_data = response.json()
-                    logger.debug(f"Получено {len(users_data)} пользователей с ролью {role}")
-                    return users_data
-                else:
-                    logger.error(f"Ошибка получения пользователей по роли {role}: {response.status_code}")
-                    return []
-                    
-        except Exception as e:
-            logger.error(f"Ошибка при получении пользователей по роли {role}: {e}")
-            return []
     
     async def validate_token(self, token: str) -> Optional[Dict[str, Any]]:
         """

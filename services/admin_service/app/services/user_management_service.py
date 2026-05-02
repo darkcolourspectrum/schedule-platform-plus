@@ -1,16 +1,49 @@
-"""User Management Service - ПРОСТАЯ ВЕРСИЯ"""
-from typing import List, Optional
+"""
+User Management Service.
+
+Изменения версии event-driven:
+    - Чтение пользователей: из локальной users_cache (через UserCacheService).
+    - Запись (роль, активность, привязка к студии): HTTP-вызовы к Auth Service
+      (через AuthServiceClient). Auth Service сам публикует события и сам
+      отзывает access-токены пользователя.
+
+Локальный users_cache обновится через consumer событий 'auth_events'
+(см. app/messaging/auth_consumer.py) - обычно в течение 1-2 секунд после
+завершения HTTP-вызова.
+
+Ответы клиенту мы формируем по данным, полученным от Auth Service в HTTP-ответе,
+а не из локального кеша - так клиент видит свежее состояние сразу,
+без ожидания доставки события через RabbitMQ.
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.connection import AuthAsyncSessionLocal, AdminAsyncSessionLocal
-from app.models.auth_models import User, Role
-from app.models.studio import Studio  
+from app.database.connection import AdminAsyncSessionLocal
+from app.models.studio import Studio
+from app.services.user_cache_service import user_cache_service
+from app.services.auth_client import auth_client, AuthServiceUserNotFound, AuthServiceError
 
-from app.services.token_revocation_service import token_revocation_service
+logger = logging.getLogger(__name__)
+
+
+# Маппинг имён ролей в id - дублирует знание из Auth Service.
+# Здесь оставлен для прозрачности, но в новой схеме мы передаём в Auth
+# имя роли строкой, и Auth сам резолвит id через RoleRepository. Этот
+# словарь используется только для формирования ответа клиенту.
+_ROLE_NAME_TO_ID = {
+    "admin": 1,
+    "teacher": 2,
+    "student": 3,
+    "guest": 4,
+}
+
 
 class UserManagementService:
-    """Сервис управления пользователями через Auth DB"""
+    """Управление пользователями (admin-операции)."""
     
     async def get_users_list(
         self,
@@ -18,127 +51,125 @@ class UserManagementService:
         offset: int = 0,
         role: Optional[str] = None,
         studio_id: Optional[int] = None,
-        is_active: Optional[bool] = None
-    ) -> List[dict]:
-        """Получить список пользователей"""
-        async with AuthAsyncSessionLocal() as session:
-            # Загружаем пользователей с ролями
-            stmt = select(User).options(joinedload(User.role))
-            
-            if role:
-                stmt = stmt.join(Role).where(Role.name == role)
-            if studio_id:
-                stmt = stmt.where(User.studio_id == studio_id)
-            if is_active is not None:
-                stmt = stmt.where(User.is_active == is_active)
-            
-            stmt = stmt.limit(limit).offset(offset)
-            result = await session.execute(stmt)
-            users = result.unique().scalars().all()
+        is_active: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        """Получить список пользователей с фильтрами из локального users_cache."""
+        users = await user_cache_service.get_all_users(
+            limit=limit,
+            offset=offset,
+            role_name=role,
+            studio_id=studio_id,
+            is_active=is_active,
+        )
         
-        # Получаем studio_names одним запросом
-        studio_ids = [u.studio_id for u in users if u.studio_id]
-        studio_map = {}
-        if studio_ids:
-            async with AdminAsyncSessionLocal() as admin_session:
-                studios_result = await admin_session.execute(
-                    select(Studio.id, Studio.name).where(Studio.id.in_(studio_ids))
-                )
-                studio_map = dict(studios_result.all())
+        # Обогащаем studio_name из Admin БД
+        studio_ids = [u["studio_id"] for u in users if u.get("studio_id")]
+        studio_map = await self._get_studio_names(studio_ids) if studio_ids else {}
         
-        # Формируем ответ
-        return [self._user_to_dict(u, studio_map.get(u.studio_id)) for u in users]
-    
-    async def update_user_role(self, user_id: int, role: str) -> dict:
-        """Изменить роль пользователя"""
-        role_id = self._get_role_id(role)
+        for u in users:
+            u["studio_name"] = studio_map.get(u.get("studio_id"))
         
-        async with AuthAsyncSessionLocal() as session:
-            user = await session.get(User, user_id, options=[joinedload(User.role)])
-            if not user:
-                raise ValueError("User not found")
-            
-            user.role_id = role_id
-            await session.commit()
-            await session.refresh(user, ["role"])
-            
-            studio_name = await self._get_studio_name(user.studio_id) if user.studio_id else None
-            await token_revocation_service.revoke_all_user_tokens(user_id, reason="role_changed")
-            return self._user_to_dict(user, studio_name)
+        return users
     
-    async def assign_user_to_studio(self, user_id: int, studio_id: int) -> dict:
-        """Привязать пользователя к студии"""
-        async with AuthAsyncSessionLocal() as session:
-            user = await session.get(User, user_id, options=[joinedload(User.role)])
-            if not user:
-                raise ValueError("User not found")
-            
-            user.studio_id = studio_id
-            await session.commit()
-            
-            studio_name = await self._get_studio_name(studio_id)
-            await token_revocation_service.revoke_all_user_tokens(user_id, reason="studio_changed")
-            return self._user_to_dict(user, studio_name)
+    async def update_user_role(self, user_id: int, role: str) -> Dict[str, Any]:
+        """Изменить роль пользователя через Auth Service."""
+        try:
+            user_data = await auth_client.change_role(user_id, role)
+        except AuthServiceUserNotFound:
+            raise ValueError("User not found")
+        except AuthServiceError as exc:
+            raise RuntimeError(f"Failed to change role: {exc}") from exc
+        
+        return self._enrich_user_response(user_data)
     
-    async def activate_user(self, user_id: int) -> dict:
-        """Активировать пользователя"""
-        async with AuthAsyncSessionLocal() as session:
-            user = await session.get(User, user_id, options=[joinedload(User.role)])
-            if not user:
-                raise ValueError("User not found")
-            
-            user.is_active = True
-            await session.commit()
-            
-            studio_name = await self._get_studio_name(user.studio_id) if user.studio_id else None
-            return self._user_to_dict(user, studio_name)
+    async def assign_user_to_studio(self, user_id: int, studio_id: int) -> Dict[str, Any]:
+        """Привязать пользователя к студии через Auth Service."""
+        # Проверяем, что студия существует в Admin БД (Auth не знает о студиях)
+        studio_name = await self._get_studio_name(studio_id)
+        if studio_name is None:
+            raise ValueError(f"Studio {studio_id} not found")
+        
+        try:
+            user_data = await auth_client.assign_studio(user_id, studio_id)
+        except AuthServiceUserNotFound:
+            raise ValueError("User not found")
+        except AuthServiceError as exc:
+            raise RuntimeError(f"Failed to assign studio: {exc}") from exc
+        
+        result = self._enrich_user_response(user_data)
+        result["studio_name"] = studio_name
+        return result
     
-    async def deactivate_user(self, user_id: int) -> dict:
-        """Деактивировать пользователя"""
-        async with AuthAsyncSessionLocal() as session:
-            user = await session.get(User, user_id, options=[joinedload(User.role)])
-            if not user:
-                raise ValueError("User not found")
-            
-            user.is_active = False
-            await session.commit()
-            
-            studio_name = await self._get_studio_name(user.studio_id) if user.studio_id else None
-            await token_revocation_service.revoke_all_user_tokens(user_id, reason="studio_changed")
-            return self._user_to_dict(user, studio_name)
+    async def activate_user(self, user_id: int) -> Dict[str, Any]:
+        """Активировать пользователя через Auth Service."""
+        try:
+            user_data = await auth_client.activate(user_id)
+        except AuthServiceUserNotFound:
+            raise ValueError("User not found")
+        except AuthServiceError as exc:
+            raise RuntimeError(f"Failed to activate user: {exc}") from exc
+        
+        return self._enrich_user_response(user_data)
+    
+    async def deactivate_user(self, user_id: int) -> Dict[str, Any]:
+        """Деактивировать пользователя через Auth Service."""
+        try:
+            user_data = await auth_client.deactivate(user_id)
+        except AuthServiceUserNotFound:
+            raise ValueError("User not found")
+        except AuthServiceError as exc:
+            raise RuntimeError(f"Failed to deactivate user: {exc}") from exc
+        
+        return self._enrich_user_response(user_data)
     
     async def _get_studio_name(self, studio_id: int) -> Optional[str]:
-        """Получить название студии по ID"""
+        """Получить имя студии по ID из Admin БД."""
         async with AdminAsyncSessionLocal() as session:
             result = await session.execute(
                 select(Studio.name).where(Studio.id == studio_id)
             )
             return result.scalar_one_or_none()
     
-    def _user_to_dict(self, user: User, studio_name: Optional[str] = None) -> dict:
-        """Конвертация User в dict с полными данными"""
+    async def _get_studio_names(self, studio_ids: list[int]) -> Dict[int, str]:
+        """Получить имена студий батчем для обогащения списков пользователей."""
+        if not studio_ids:
+            return {}
+        async with AdminAsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Studio.id, Studio.name).where(Studio.id.in_(studio_ids))
+            )
+            return dict(result.all())
+    
+    def _enrich_user_response(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Привести ответ Auth Service (UserProfile) к формату,
+        ожидаемому фронтом (UserDetailResponse).
+        
+        Auth возвращает поле 'role' как строку (имя роли), фронт ждёт
+        вложенный объект {id, name, description}.
+        """
+        role_name = user_data.get("role", "student")
+        if isinstance(role_name, dict):
+            role_obj = role_name
+            role_name = role_obj.get("name", "student")
+        
         return {
-            "id": user.id,
-            "email": user.email,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "full_name": f"{user.first_name} {user.last_name}",
-            "phone": user.phone,
-            "role_id": user.role_id,
-            "role": user.role.name if user.role else "guest",
-            "studio_id": user.studio_id,
-            "studio_name": studio_name,
-            "is_active": user.is_active,
-            "is_verified": user.is_verified,
+            "id": user_data["id"],
+            "email": user_data["email"],
+            "first_name": user_data["first_name"],
+            "last_name": user_data["last_name"],
+            "full_name": f"{user_data['first_name']} {user_data['last_name']}".strip(),
+            "phone": user_data.get("phone"),
+            "role_id": _ROLE_NAME_TO_ID.get(role_name, 3),
+            "role": role_name,
+            "studio_id": user_data.get("studio_id"),
+            "studio_name": user_data.get("studio_name"),
+            "is_active": user_data["is_active"],
+            "is_verified": user_data.get("is_verified", False),
             "login_attempts": 0,
             "locked_until": None,
-            "last_login": user.last_login.isoformat() if user.last_login else None,
-            "created_at": user.created_at.isoformat() if user.created_at else None,
-            "privacy_policy_accepted": user.privacy_policy_accepted,
-            "privacy_policy_accepted_at": user.privacy_policy_accepted_at.isoformat() if user.privacy_policy_accepted_at else None,
+            "last_login": user_data.get("last_login"),
+            "created_at": user_data.get("created_at"),
+            "privacy_policy_accepted": True,
+            "privacy_policy_accepted_at": None,
         }
-    
-    def _get_role_id(self, role_name: str) -> int:
-        """Получить ID роли по имени"""
-        role_map = {"admin": 1, "teacher": 2, "student": 3, "guest": 4}
-        return role_map.get(role_name.lower(), 3)

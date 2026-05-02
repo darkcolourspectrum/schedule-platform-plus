@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     )
     allow_credentials: bool = Field(True, env="ALLOW_CREDENTIALS")
     
+    # RABBITMQ 
+    rabbitmq_url: str = Field("amqp://guest:guest@rabbitmq:5672/", env="RABBITMQ_URL")
+    
+    # OUTBOX PUBLISHER
+    outbox_poll_interval_seconds: float = Field(2.0, env="OUTBOX_POLL_INTERVAL_SECONDS")
+    outbox_batch_size: int = Field(50, env="OUTBOX_BATCH_SIZE")
+    outbox_max_attempts: int = Field(10, env="OUTBOX_MAX_ATTEMPTS")
+
     # Email
     smtp_host: str = Field("smtp.gmail.com", env="SMTP_HOST")
     smtp_port: int = Field(587, env="SMTP_PORT")

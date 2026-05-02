@@ -127,3 +127,12 @@ class CurrentUser(BaseModel):
     
     class Config:
         from_attributes = True
+
+class UserRoleUpdateRequest(BaseModel):
+    """Запрос на изменение роли пользователя (внутренний endpoint)"""
+    role: str = Field(..., description="Имя роли: admin, teacher, student, guest")
+
+
+class UserStudioAssignRequest(BaseModel):
+    """Запрос на привязку пользователя к студии (внутренний endpoint)"""
+    studio_id: int = Field(..., description="ID студии")

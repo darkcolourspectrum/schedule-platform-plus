@@ -9,11 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database.connection import (
     test_admin_db_connection,
-    test_auth_db_connection,
     close_db_connections
 )
 from app.database.redis_client import redis_client
 from app.api.v1 import studios, classrooms, users, user_management, dashboard
+from app.messaging.auth_consumer import consumer as auth_consumer
+
 
 # Logging
 logging.basicConfig(
@@ -34,24 +35,25 @@ async def lifespan(app: FastAPI):
     
     # Test database connections
     admin_db_ok = await test_admin_db_connection()
-    auth_db_ok = await test_auth_db_connection()
-    
     if not admin_db_ok:
         logger.error("❌ Admin DB connection failed!")
     else:
         logger.info("✅ Admin DB connected")
     
-    if not auth_db_ok:
-        logger.error("❌ Auth DB connection failed!")
-    else:
-        logger.info("✅ Auth DB (READ-ONLY) connected")
-    
+    # Запуск consumer'а событий из Auth Service
+    try:
+        await auth_consumer.start()
+    except Exception as exc:
+        logger.error(f"Failed to start auth event consumer: {exc}")
+        raise
+
     logger.info(f"✅ {settings.app_name} started successfully")
     
     yield
     
     # Shutdown
     logger.info("🔄 Shutting down Admin Service...")
+    await auth_consumer.stop()
     await redis_client.disconnect()
     await close_db_connections()
     logger.info("✅ Admin Service stopped")
@@ -87,17 +89,15 @@ app.include_router(dashboard.router, prefix="/api/v1")
 async def health_check():
     """Health check endpoint"""
     admin_db_ok = await test_admin_db_connection()
-    auth_db_ok = await test_auth_db_connection()
     redis_ok = redis_client.is_connected
     
     return {
-        "status": "healthy" if (admin_db_ok and auth_db_ok) else "degraded",
+        "status": "healthy" if admin_db_ok else "degraded",
         "service": settings.app_name,
         "version": settings.app_version,
         "environment": settings.environment,
         "databases": {
             "admin_db": "connected" if admin_db_ok else "disconnected",
-            "auth_db_readonly": "connected" if auth_db_ok else "disconnected"
         },
         "redis": "connected" if redis_ok else "disconnected"
     }

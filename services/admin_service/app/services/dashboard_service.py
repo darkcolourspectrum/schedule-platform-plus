@@ -1,34 +1,32 @@
-"""Admin Dashboard Service"""
-from typing import Dict, Any
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+"""
+Admin Dashboard Service.
 
-from app.database.connection import AdminAsyncSessionLocal, AuthAsyncSessionLocal
+Чтение статистики пользователей идёт из локального users_cache
+(через UserCacheService), а не из чужой Auth БД. Это устраняет последний
+прямой доступ Admin Service к Auth БД.
+"""
+
+from sqlalchemy import select, func
+
+from app.database.connection import AdminAsyncSessionLocal
 from app.models.studio import Studio
 from app.models.classroom import Classroom
-from app.models.auth_models import User
+from app.services.user_cache_service import user_cache_service
 from app.schemas.dashboard import SystemStatsResponse, AdminDashboardResponse
 
 
 class DashboardService:
-    """Сервис для админского дашборда"""
+    """Сервис для админского дашборда."""
     
     async def get_system_statistics(self) -> SystemStatsResponse:
-        """Получить системную статистику"""
-        # Пользователи из Auth DB
-        async with AuthAsyncSessionLocal() as auth_session:
-            total_users = await auth_session.scalar(select(func.count(User.id)))
-            active_users = await auth_session.scalar(
-                select(func.count(User.id)).where(User.is_active == True)
-            )
-            students = await auth_session.scalar(
-                select(func.count(User.id)).where(User.role_id == 3)
-            )
-            teachers = await auth_session.scalar(
-                select(func.count(User.id)).where(User.role_id == 2)
-            )
+        """Получить системную статистику."""
+        # Пользователи - из локального users_cache
+        total_users = await user_cache_service.count_users()
+        active_users = await user_cache_service.count_users(is_active=True)
+        students = await user_cache_service.count_users(role_name="student")
+        teachers = await user_cache_service.count_users(role_name="teacher")
         
-        # Студии и кабинеты из Admin DB
+        # Студии и кабинеты - из Admin БД (как и раньше)
         async with AdminAsyncSessionLocal() as admin_session:
             total_studios = await admin_session.scalar(select(func.count(Studio.id)))
             active_studios = await admin_session.scalar(
@@ -41,23 +39,23 @@ class DashboardService:
         
         return SystemStatsResponse(
             users={
-                "total": total_users or 0,
-                "active": active_users or 0,
-                "students": students or 0,
-                "teachers": teachers or 0
+                "total": total_users,
+                "active": active_users,
+                "students": students,
+                "teachers": teachers,
             },
             studios={
                 "total": total_studios or 0,
-                "active": active_studios or 0
+                "active": active_studios or 0,
             },
             classrooms={
                 "total": total_classrooms or 0,
-                "active": active_classrooms or 0
-            }
+                "active": active_classrooms or 0,
+            },
         )
     
     async def get_admin_dashboard(self, admin_id: int) -> AdminDashboardResponse:
-        """Получить полный дашборд админа"""
+        """Получить полный дашборд админа."""
         stats = await self.get_system_statistics()
         
         return AdminDashboardResponse(
@@ -66,6 +64,6 @@ class DashboardService:
             quick_actions=[
                 {"id": "manage_users", "title": "Управление пользователями", "url": "/admin/users"},
                 {"id": "manage_studios", "title": "Управление студиями", "url": "/admin/studios"},
-                {"id": "system_stats", "title": "Статистика системы", "url": "/admin/stats"}
-            ]
+                {"id": "system_stats", "title": "Статистика системы", "url": "/admin/stats"},
+            ],
         )

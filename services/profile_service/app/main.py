@@ -14,6 +14,7 @@ from app.api.router import api_router
 from app.database.connection import test_database_connection
 from app.services.cache_service import cache_service
 from app.services.auth_client import auth_client
+from app.messaging.auth_consumer import consumer as auth_consumer
 
 # Импортируем middleware из core
 from app.core.middleware import (
@@ -84,10 +85,17 @@ async def lifespan(app: FastAPI):
     
     logger.info("🎉 Profile Service успешно запущен!")
     
+    try:
+        await auth_consumer.start()
+    except Exception as exc:
+        logger.error(f"Failed to start auth event consumer: {exc}")
+        raise
+
     yield
     
     # Завершение
     logger.info("🔄 Завершение работы Profile Service...")
+    await auth_consumer.stop()
     logger.info("✅ Profile Service остановлен")
 
 
