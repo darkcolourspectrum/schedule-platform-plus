@@ -91,7 +91,38 @@ class AuthServiceClient:
             return None
     
     
-    
+    async def get_user_by_id_from_auth(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Прямое чтение пользователя из Auth Service по HTTP, минуя users_cache.
+        
+        Используется для read-your-writes сценария: пользователь только что
+        обновил свои данные в Auth и должен сразу их увидеть, не дожидаясь
+        пока событие user.updated дойдёт до локального users_cache через
+        outbox + RabbitMQ (это занимает 0.5-3 секунды, что заметно для UX).
+        
+        Дороже обычного get_user_by_id (есть сетевой RTT ~10мс), но 
+        используется только для собственного профиля, что редкий сценарий.
+        При недоступности Auth - fallback на локальный кеш.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/v1/users/{user_id}",
+                    headers=self.headers
+                )
+                if response.status_code == 200:
+                    return response.json()
+                if response.status_code == 404:
+                    logger.warning(f"User {user_id} not found in Auth")
+                    return None
+                logger.error(
+                    f"Auth get_user error: {response.status_code} - {response.text}"
+                )
+                return await self.get_user_by_id(user_id)
+        except Exception as exc:
+            logger.error(f"Auth HTTP error for user {user_id}: {exc}")
+            return await self.get_user_by_id(user_id)
+
     async def health_check(self) -> bool:
         """
         Проверка доступности Auth Service

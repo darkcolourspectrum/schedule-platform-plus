@@ -15,15 +15,24 @@ from app.core.exceptions import (
     InvalidLessonStatusException
 )
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.messaging import (
+    record_lesson_created,
+    record_lesson_cancelled,
+    record_lesson_rescheduled,
+)
+
 logger = logging.getLogger(__name__)
 
 
 class LessonService:
     """Сервис для работы с занятиями"""
     
-    def __init__(self, lesson_repo: LessonRepository):
+    def __init__(self, lesson_repo: LessonRepository, db: AsyncSession):
         self.lesson_repo = lesson_repo
-    
+        self.db = db
+
     async def create_lesson(self, data: LessonCreate) -> Lesson:
         """
         Создать разовое занятие
@@ -65,11 +74,27 @@ class LessonService:
         lesson = await self.lesson_repo.create(lesson)
         logger.info(f"Created lesson {lesson.id}")
         
-        # Добавляем учеников
+       # Добавляем учеников
         for student_id in data.student_ids:
             await self.lesson_repo.add_student(lesson.id, student_id)
         
+        # Записываем событие в outbox.
+        # Коммит произойдёт ниже по стеку (в endpoint через get_async_session) -
+        # тогда и lesson, и student_ids, и outbox-запись будут в одной транзакции.
+        await record_lesson_created(
+            self.db,
+            lesson_id=lesson.id,
+            teacher_id=lesson.teacher_id,
+            student_ids=list(data.student_ids),
+            studio_id=lesson.studio_id,
+            classroom_id=lesson.classroom_id,
+            lesson_date=lesson.lesson_date,
+            start_time=lesson.start_time,
+            end_time=lesson.end_time,
+        )
+        
         return lesson
+        
     
     async def get_lesson(self, lesson_id: int) -> Lesson:
         """Получить занятие по ID"""
@@ -80,11 +105,18 @@ class LessonService:
     
     async def update_lesson(self, lesson_id: int, data: LessonUpdate) -> Lesson:
         """
-        Обновить занятие
+        Обновить занятие.
         
-        Проверяет валидность изменений (например, конфликты кабинета)
+        Если изменилась дата/время - публикует событие lesson.rescheduled,
+        чтобы студентам пришло уведомление.
+        Изменения кабинета, заметок или статуса (кроме переноса) не уведомляются.
         """
         lesson = await self.get_lesson(lesson_id)
+        
+        # Запоминаем старые значения - для diff и события lesson.rescheduled
+        old_lesson_date = lesson.lesson_date
+        old_start_time = lesson.start_time
+        old_end_time = lesson.end_time
         
         # Проверяем изменение статуса
         if data.status and data.status != lesson.status:
@@ -128,10 +160,35 @@ class LessonService:
         lesson = await self.lesson_repo.update_obj(lesson)
         logger.info(f"Updated lesson {lesson_id}")
         
+        # Если изменилось расписание - шлём событие lesson.rescheduled.
+        # Изменение только кабинета или заметок не уведомляем (студенту это
+        # не критично, и спам уведомлений хуже их полного отсутствия).
+        schedule_changed = (
+            lesson.lesson_date != old_lesson_date
+            or lesson.start_time != old_start_time
+            or lesson.end_time != old_end_time
+        )
+        
+        if schedule_changed:
+            student_ids = await self.lesson_repo.get_student_ids(lesson_id)
+            await record_lesson_rescheduled(
+                self.db,
+                lesson_id=lesson.id,
+                teacher_id=lesson.teacher_id,
+                student_ids=student_ids,
+                studio_id=lesson.studio_id,
+                old_lesson_date=old_lesson_date,
+                old_start_time=old_start_time,
+                old_end_time=old_end_time,
+                new_lesson_date=lesson.lesson_date,
+                new_start_time=lesson.start_time,
+                new_end_time=lesson.end_time,
+            )
+        
         return lesson
     
     async def cancel_lesson(self, lesson_id: int, reason: Optional[str] = None) -> Lesson:
-        """Отменить занятие"""
+        """Отменить занятие. Публикует событие lesson.cancelled."""
         lesson = await self.get_lesson(lesson_id)
         
         if lesson.status == "cancelled":
@@ -143,6 +200,20 @@ class LessonService:
         
         lesson = await self.lesson_repo.update_obj(lesson)
         logger.info(f"Cancelled lesson {lesson_id}")
+        
+        # Получаем студентов до публикации события - они нужны для уведомлений
+        student_ids = await self.lesson_repo.get_student_ids(lesson_id)
+        
+        await record_lesson_cancelled(
+            self.db,
+            lesson_id=lesson.id,
+            teacher_id=lesson.teacher_id,
+            student_ids=student_ids,
+            studio_id=lesson.studio_id,
+            lesson_date=lesson.lesson_date,
+            start_time=lesson.start_time,
+            cancellation_reason=reason,
+        )
         
         return lesson
     

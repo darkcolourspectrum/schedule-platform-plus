@@ -416,6 +416,8 @@ services:
       dockerfile: services/notification_service/Dockerfile
     container_name: notification_service
     restart: unless-stopped
+    volumes:
+      - ./services/notification_service/migrations:/app/migrations
     environment:
       APP_NAME: Notification Service
       DEBUG: ${DEBUG:-true}

@@ -15,7 +15,11 @@ from aio_pika import ExchangeType
 from aio_pika.abc import AbstractIncomingMessage
 
 from app.config import settings
-from app.messaging.handlers import handle_lesson_created
+from app.messaging.handlers import (
+    handle_lesson_created,
+    handle_lesson_cancelled,
+    handle_lesson_rescheduled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +27,17 @@ logger = logging.getLogger(__name__)
 EXCHANGE_NAME = "schedule_events"
 QUEUE_NAME = "notifications.lesson_events"
 
+DLX_NAME = "schedule_events.dlx"
+DLQ_NAME = "notifications.lesson_events.dlq"
 
-# Маппинг event_type → handler
+
+# Маппинг event_type → handler.
+# event_type для маршрутизации берём из routing_key сообщения,
+# а не из payload (новая схема outbox).
 HANDLERS: Dict[str, Callable[[dict], Awaitable[None]]] = {
     "lesson.created": handle_lesson_created,
+    "lesson.cancelled": handle_lesson_cancelled,
+    "lesson.rescheduled": handle_lesson_rescheduled,
 }
 
 
@@ -44,15 +55,32 @@ class EventConsumer:
         self._channel = await self._connection.channel()
         await self._channel.set_qos(prefetch_count=10)
         
+        # DLX и DLQ для битых сообщений
+        dlx = await self._channel.declare_exchange(
+            DLX_NAME,
+            ExchangeType.TOPIC,
+            durable=True,
+        )
+        dlq = await self._channel.declare_queue(
+            DLQ_NAME,
+            durable=True,
+        )
+        await dlq.bind(dlx, routing_key="#")
+        
+        # Основной exchange
         exchange = await self._channel.declare_exchange(
             EXCHANGE_NAME,
             ExchangeType.TOPIC,
             durable=True,
         )
         
+        # Основная очередь с DLX-настройкой
         queue = await self._channel.declare_queue(
             QUEUE_NAME,
             durable=True,
+            arguments={
+                "x-dead-letter-exchange": DLX_NAME,
+            },
         )
         
         # Биндим очередь на все события lesson.*
@@ -74,34 +102,45 @@ class EventConsumer:
         """
         Обработать одно сообщение из очереди.
         
-        При успехе ack-ает сообщение, при ошибке делает reject без re-queue
-        (чтобы битое сообщение не зацикливалось — пойдёт в DLX в будущем).
+        При успехе ack-ает сообщение, при ошибке raise -> reject без re-queue,
+        сообщение уйдёт в DLX (схему см. в start()).
         """
         async with message.process(requeue=False):
             try:
                 body = message.body.decode("utf-8")
                 event = json.loads(body)
-                event_type = event.get("event_type")
-                
-                handler = HANDLERS.get(event_type)
-                if handler is None:
-                    logger.warning(
-                        "No handler for event_type=%s routing_key=%s",
-                        event_type, message.routing_key,
-                    )
-                    return
-                
-                await handler(event)
-                logger.info("Event processed: event_type=%s", event_type)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                logger.error(
+                    "Invalid message body, sending to DLX: routing_key=%s err=%s",
+                    message.routing_key, exc,
+                )
+                raise
             
-            except json.JSONDecodeError as exc:
-                logger.error("Invalid JSON in message: %s", exc)
+            # event_type определяем по routing_key, а не из payload
+            # (новая схема outbox не содержит event_type в теле).
+            event_type = message.routing_key
+            handler = HANDLERS.get(event_type)
+            
+            if handler is None:
+                logger.warning(
+                    "No handler for routing_key=%s, sending to DLX",
+                    message.routing_key,
+                )
+                raise ValueError(f"No handler for routing_key={message.routing_key}")
+            
+            try:
+                await handler(event)
+                logger.debug(
+                    "Event processed: routing_key=%s event_id=%s",
+                    event_type, event.get("event_id"),
+                )
             except Exception as exc:
                 logger.exception(
-                    "Handler failed: event_type=%s error=%s",
-                    event.get("event_type") if "event" in dir() else "unknown",
-                    exc,
+                    "Handler failed, sending to DLX: routing_key=%s "
+                    "event_id=%s error=%s",
+                    event_type, event.get("event_id"), exc,
                 )
+                raise
 
 
 consumer = EventConsumer(amqp_url=settings.rabbitmq_url)

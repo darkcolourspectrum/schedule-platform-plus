@@ -8,6 +8,7 @@ from app.models.lesson import Lesson
 from app.models.lesson_student import LessonStudent, RecurringPatternStudent
 from app.models.user_cache import UserCache
 from app.models.processed_event import ProcessedEvent
+from app.models.event_outbox import EventOutbox
 
 __all__ = [
     "Base",
@@ -17,5 +18,6 @@ __all__ = [
     "LessonStudent",
     "RecurringPatternStudent",
     "UserCache", 
-    "ProcessedEvent"
+    "ProcessedEvent",
+    "EventOutbox"
 ]

@@ -5,7 +5,7 @@ FastAPI Dependencies для Schedule Service
 from typing import Optional
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, AsyncGenerator
 
 from app.database.connection import get_schedule_db
 from app.repositories.recurring_pattern_repository import RecurringPatternRepository
@@ -23,7 +23,7 @@ security = HTTPBearer(auto_error=False)
 
 # ========== DATABASE DEPENDENCIES ==========
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Get Schedule Service database session"""
     async for session in get_schedule_db():
         yield session
@@ -72,10 +72,11 @@ async def get_pattern_service(
 
 
 async def get_lesson_service(
-    lesson_repo: LessonRepository = Depends(get_lesson_repository)
+    lesson_repo: LessonRepository = Depends(get_lesson_repository),
+    db: AsyncSession = Depends(get_db),
 ) -> LessonService:
     """Get LessonService"""
-    return LessonService(lesson_repo)
+    return LessonService(lesson_repo, db)
 
 
 async def get_schedule_service(

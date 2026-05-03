@@ -22,7 +22,6 @@ from app.dependencies import (
 )
 from app.core.security import extract_role_name
 
-from app.messaging import publish_lesson_created
 
 logger = logging.getLogger(__name__)
 
@@ -87,17 +86,6 @@ async def create_lesson(
         is_recurring=False,
     )
     
-    # Публикация события для Notification Service
-    await publish_lesson_created(
-        lesson_id=lesson.id,
-        teacher_id=lesson.teacher_id,
-        student_ids=student_ids,
-        studio_id=lesson.studio_id,
-        classroom_id=lesson.classroom_id,
-        lesson_date=lesson.lesson_date,
-        start_time=lesson.start_time,
-        end_time=lesson.end_time,
-    )
 
     return response
 

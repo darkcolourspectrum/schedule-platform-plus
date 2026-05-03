@@ -11,8 +11,9 @@ from app.config import settings
 from app.api.v1.router import api_router
 from app.database.redis_client import redis_client
 
-from app.messaging import publisher
 from app.messaging.auth_consumer import consumer as auth_consumer
+from app.messaging.publisher_worker import init_worker
+from app.database.connection import ScheduleAsyncSessionLocal
 
 # Настройка логирования
 logging.basicConfig(
@@ -32,20 +33,32 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.environment}")
     
     await redis_client.connect()
-    await publisher.connect()
     
     try:
         await auth_consumer.start()
     except Exception as exc:
         logger.error("Failed to start auth event consumer: %s", exc)
         raise
+    
+    # Запуск outbox-publisher воркера для надёжной публикации событий
+    # (lesson.created и т.п.) через транзакционный outbox.
+    try:
+        outbox_worker = init_worker(ScheduleAsyncSessionLocal)
+        await outbox_worker.start()
+    except Exception as exc:
+        logger.error("Failed to start outbox publisher worker: %s", exc)
+        raise
 
     yield
     
     # Shutdown
     logger.info("Shutting down...")
+    
+    from app.messaging.publisher_worker import worker as outbox_worker
+    if outbox_worker is not None:
+        await outbox_worker.stop()
+    
     await auth_consumer.stop()
-    await publisher.close()
     await redis_client.disconnect()
 
 

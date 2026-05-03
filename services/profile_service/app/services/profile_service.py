@@ -70,7 +70,17 @@ class ProfileService:
                     return cached_data
             
             # Получаем данные пользователя из Auth Service
-            user_data = await auth_client.get_user_by_id(user_id)
+            # Для собственного профиля читаем напрямую из Auth по HTTP -
+            # это единственный источник правды для first_name/last_name/phone,
+            # и пользователь должен сразу видеть свои изменения после Save
+            # без ожидания event-driven синхронизации (read-your-writes).
+            # Для чужих профилей читаем из локального users_cache - это и быстрее,
+            # и не зависит от доступности Auth.
+            if is_own_profile:
+                user_data = await auth_client.get_user_by_id_from_auth(user_id)
+            else:
+                user_data = await auth_client.get_user_by_id(user_id)
+                
             if not user_data:
                 logger.warning(f"Пользователь {user_id} не найден в Auth Service")
                 return None
