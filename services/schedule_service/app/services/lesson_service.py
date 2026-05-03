@@ -105,11 +105,13 @@ class LessonService:
     
     async def update_lesson(self, lesson_id: int, data: LessonUpdate) -> Lesson:
         """
-        Обновить занятие.
+        Обновить занятие (редактирование расписания и метаданных).
         
-        Если изменилась дата/время - публикует событие lesson.rescheduled,
-        чтобы студентам пришло уведомление.
-        Изменения кабинета, заметок или статуса (кроме переноса) не уведомляются.
+        Если изменилась дата/время/длительность - публикует событие
+        lesson.rescheduled, чтобы студентам пришло уведомление.
+        Изменения только кабинета или заметок не уведомляются.
+        
+        Смена статуса и отмена идут через отдельные эндпоинты.
         """
         lesson = await self.get_lesson(lesson_id)
         
@@ -117,52 +119,59 @@ class LessonService:
         old_lesson_date = lesson.lesson_date
         old_start_time = lesson.start_time
         old_end_time = lesson.end_time
+        old_classroom_id = lesson.classroom_id
         
-        # Проверяем изменение статуса
-        if data.status and data.status != lesson.status:
-            self._validate_status_transition(lesson.status, data.status)
+        # Вычисляем новые значения расписания (если поля переданы - берём их,
+        # иначе - старые). Длительность вычисляем из старых end-start.
+        new_lesson_date = data.lesson_date if data.lesson_date is not None else old_lesson_date
+        new_start_time = data.start_time if data.start_time is not None else old_start_time
         
-        # Обновляем поля
-        if data.classroom_id is not None:
-            # Проверяем конфликт при изменении кабинета
-            if data.classroom_id != lesson.classroom_id:
-                has_conflict = await self.lesson_repo.check_classroom_conflict(
-                    classroom_id=data.classroom_id,
-                    lesson_date=lesson.lesson_date,
-                    start_time=lesson.start_time,
-                    end_time=lesson.end_time,
-                    exclude_lesson_id=lesson_id
+        if data.duration_minutes is not None:
+            new_end_time = self._calculate_end_time(new_start_time, data.duration_minutes)
+        elif data.start_time is not None:
+            # Сохраняем старую длительность при сдвиге времени
+            old_duration = self._duration_minutes(old_start_time, old_end_time)
+            new_end_time = self._calculate_end_time(new_start_time, old_duration)
+        else:
+            new_end_time = old_end_time
+        
+        new_classroom_id = data.classroom_id if data.classroom_id is not None else old_classroom_id
+        
+        # Конфликт кабинета проверяем по НОВЫМ значениям (не по старым).
+        schedule_or_classroom_changed = (
+            new_lesson_date != old_lesson_date
+            or new_start_time != old_start_time
+            or new_end_time != old_end_time
+            or new_classroom_id != old_classroom_id
+        )
+        if new_classroom_id and schedule_or_classroom_changed:
+            has_conflict = await self.lesson_repo.check_classroom_conflict(
+                classroom_id=new_classroom_id,
+                lesson_date=new_lesson_date,
+                start_time=new_start_time,
+                end_time=new_end_time,
+                exclude_lesson_id=lesson_id,
+            )
+            if has_conflict:
+                raise ClassroomConflictException(
+                    classroom_id=new_classroom_id,
+                    lesson_date=str(new_lesson_date),
+                    time=str(new_start_time),
                 )
-                
-                if has_conflict:
-                    raise ClassroomConflictException(
-                        classroom_id=data.classroom_id,
-                        lesson_date=str(lesson.lesson_date),
-                        time=str(lesson.start_time)
-                    )
-            
-            lesson.classroom_id = data.classroom_id
         
-        if data.start_time is not None:
-            lesson.start_time = data.start_time
-            # Пересчитываем end_time
-            lesson.end_time = self._calculate_end_time(data.start_time, 60)
-        
-        if data.status is not None:
-            lesson.status = data.status
-        
+        # Применяем изменения
+        lesson.lesson_date = new_lesson_date
+        lesson.start_time = new_start_time
+        lesson.end_time = new_end_time
+        lesson.classroom_id = new_classroom_id
         if data.notes is not None:
             lesson.notes = data.notes
-        
-        if data.cancellation_reason is not None:
-            lesson.cancellation_reason = data.cancellation_reason
         
         lesson = await self.lesson_repo.update_obj(lesson)
         logger.info(f"Updated lesson {lesson_id}")
         
         # Если изменилось расписание - шлём событие lesson.rescheduled.
-        # Изменение только кабинета или заметок не уведомляем (студенту это
-        # не критично, и спам уведомлений хуже их полного отсутствия).
+        # Изменение только кабинета или заметок не уведомляем.
         schedule_changed = (
             lesson.lesson_date != old_lesson_date
             or lesson.start_time != old_start_time
@@ -302,6 +311,13 @@ class LessonService:
         end_datetime = start_datetime + timedelta(minutes=duration_minutes)
         return end_datetime.time()
     
+    @staticmethod
+    def _duration_minutes(start: time, end: time) -> int:
+        """Длительность между двумя временами в минутах (без учёта суток)."""
+        s = start.hour * 60 + start.minute
+        e = end.hour * 60 + end.minute
+        return e - s
+
     def _validate_status_transition(self, current_status: str, new_status: str) -> None:
         """
         Валидация перехода статусов

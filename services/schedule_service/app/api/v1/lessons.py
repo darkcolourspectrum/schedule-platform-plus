@@ -9,8 +9,10 @@ from app.schemas.lesson import (
     LessonCreate,
     LessonUpdate,
     LessonResponse,
-    LessonStudentInfo
+    LessonStudentInfo,
+    LessonCancelRequest,
 )
+
 from app.schemas.common import SuccessResponse
 from app.services.lesson_service import LessonService
 from app.dependencies import (
@@ -191,7 +193,7 @@ async def update_lesson(
 )
 async def cancel_lesson(
     lesson_id: int,
-    reason: str = None,
+    data: LessonCancelRequest | None = None,
     current_user: dict = Depends(get_current_teacher),
     lesson_service: LessonService = Depends(get_lesson_service)
 ):
@@ -203,9 +205,10 @@ async def cancel_lesson(
     if not check_teacher_access(current_user, lesson.teacher_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this lesson"
+            detail="У вас нет доступа к этому занятию"
         )
     
+    reason = data.reason if data else None
     cancelled_lesson = await lesson_service.cancel_lesson(lesson_id, reason)
     
     # Формируем ответ

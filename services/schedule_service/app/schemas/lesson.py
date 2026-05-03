@@ -23,13 +23,21 @@ class LessonCreate(BaseModel):
 
 
 class LessonUpdate(BaseModel):
-    """Схема обновления занятия"""
+    """
+    Схема обновления занятия.
+    
+    Только редактирование расписания и метаданных. Смена статуса и
+    отмена идут через отдельные эндпоинты:
+        - POST /lessons/{id}/cancel
+        - POST /lessons/{id}/complete
+        - POST /lessons/{id}/mark-missed
+    """
     
     classroom_id: Optional[int] = None
+    lesson_date: Optional[date] = None
     start_time: Optional[time] = None
-    status: Optional[str] = Field(None, pattern="^(scheduled|completed|cancelled|missed)$")
+    duration_minutes: Optional[int] = Field(None, ge=30, le=180)
     notes: Optional[str] = Field(None, max_length=1000)
-    cancellation_reason: Optional[str] = Field(None, max_length=500)
 
 
 class LessonStudentInfo(BaseModel):
@@ -81,3 +89,7 @@ class LessonWithDetails(LessonResponse):
     student_names: List[str] = Field(default_factory=list)
     classroom_name: Optional[str] = None
     studio_name: Optional[str] = None
+
+class LessonCancelRequest(BaseModel):
+    """Тело запроса POST /lessons/{id}/cancel."""
+    reason: Optional[str] = Field(default=None, max_length=500)

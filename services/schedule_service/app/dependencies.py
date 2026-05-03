@@ -5,8 +5,8 @@ FastAPI Dependencies для Schedule Service
 from typing import Optional
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.ext.asyncio import AsyncSession, AsyncGenerator
-
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import get_schedule_db
 from app.repositories.recurring_pattern_repository import RecurringPatternRepository
 from app.repositories.lesson_repository import LessonRepository
