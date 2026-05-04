@@ -12,6 +12,7 @@ from app.api.v1.router import api_router
 from app.database.redis_client import redis_client
 
 from app.messaging.auth_consumer import consumer as auth_consumer
+from app.messaging.admin_consumer import consumer as admin_consumer
 from app.messaging.publisher_worker import init_worker
 from app.database.connection import ScheduleAsyncSessionLocal
 
@@ -40,6 +41,15 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to start auth event consumer: %s", exc)
         raise
     
+    # Запуск consumer'а событий из Admin Service.
+    # Слушает studio.* и classroom.* в exchange 'admin_events',
+    # синхронизирует локальные studios_cache и classrooms_cache.
+    try:
+        await admin_consumer.start()
+    except Exception as exc:
+        logger.error("Failed to start admin event consumer: %s", exc)
+        raise
+    
     # Запуск outbox-publisher воркера для надёжной публикации событий
     # (lesson.created и т.п.) через транзакционный outbox.
     try:
@@ -58,6 +68,7 @@ async def lifespan(app: FastAPI):
     if outbox_worker is not None:
         await outbox_worker.stop()
     
+    await admin_consumer.stop()
     await auth_consumer.stop()
     await redis_client.disconnect()
 

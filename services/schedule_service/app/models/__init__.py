@@ -9,6 +9,8 @@ from app.models.lesson_student import LessonStudent, RecurringPatternStudent
 from app.models.user_cache import UserCache
 from app.models.processed_event import ProcessedEvent
 from app.models.event_outbox import EventOutbox
+from app.models.studio_cache import StudioCache
+from app.models.classroom_cache import ClassroomCache
 
 __all__ = [
     "Base",
@@ -19,5 +21,7 @@ __all__ = [
     "RecurringPatternStudent",
     "UserCache", 
     "ProcessedEvent",
-    "EventOutbox"
+    "EventOutbox", 
+    "StudioCache",
+    "ClassroomCache"
 ]

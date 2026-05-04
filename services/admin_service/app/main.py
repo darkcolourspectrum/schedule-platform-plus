@@ -9,11 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database.connection import (
     test_admin_db_connection,
-    close_db_connections
+    close_db_connections,
+    AdminAsyncSessionLocal,
 )
 from app.database.redis_client import redis_client
 from app.api.v1 import studios, classrooms, users, user_management, dashboard
 from app.messaging.auth_consumer import consumer as auth_consumer
+from app.messaging.publisher_worker import init_worker
 
 
 # Logging
@@ -46,6 +48,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Failed to start auth event consumer: {exc}")
         raise
+    
+    # Запуск outbox-publisher воркера для надёжной публикации событий
+    # (studio.created, studio.updated, studio.deactivated, classroom.*)
+    # через транзакционный outbox в exchange 'admin_events'.
+    try:
+        outbox_worker = init_worker(AdminAsyncSessionLocal)
+        await outbox_worker.start()
+    except Exception as exc:
+        logger.error(f"Failed to start outbox publisher worker: {exc}")
+        raise
 
     logger.info(f"✅ {settings.app_name} started successfully")
     
@@ -53,6 +65,11 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("🔄 Shutting down Admin Service...")
+    
+    from app.messaging.publisher_worker import worker as outbox_worker
+    if outbox_worker is not None:
+        await outbox_worker.stop()
+    
     await auth_consumer.stop()
     await redis_client.disconnect()
     await close_db_connections()

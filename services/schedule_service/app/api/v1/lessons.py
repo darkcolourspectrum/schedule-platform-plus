@@ -55,7 +55,7 @@ async def create_lesson(
     
     # Проверяем что преподаватель создает занятие для себя (если не админ)
     role = extract_role_name(current_user.get("role"))
-    if role != "admin" and current_user.get("id") != data.teacher_id:
+    if role != "admin" and current_user.get("user_id") != data.teacher_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only create lessons for yourself"
@@ -108,7 +108,7 @@ async def get_lesson(
     
     # Проверяем доступ
     role = extract_role_name(current_user.get("role"))
-    user_id = current_user.get("id")
+    user_id = current_user.get("user_id")
     
     # Админ видит всё
     if role == "admin":

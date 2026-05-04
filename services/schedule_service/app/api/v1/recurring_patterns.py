@@ -48,15 +48,15 @@ async def create_recurring_pattern(
     if not check_studio_access(current_user, data.studio_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this studio"
+            detail="У вас нет доступа к этой студии!"
         )
     
     # Проверяем что преподаватель создает шаблон для себя (если не админ)
     role = extract_role_name(current_user.get("role"))
-    if role != "admin" and current_user.get("id") != data.teacher_id:
+    if role != "admin" and current_user.get("user_id") != data.teacher_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only create patterns for yourself"
+            detail="Вы можете создать шаблон только для себя!"
         )
     
     pattern, generated_count = await pattern_service.create_pattern(data)
@@ -107,7 +107,7 @@ async def get_recurring_patterns(
         # Ученики не имеют доступа к шаблонам
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Students cannot access recurring patterns"
+            detail="У вас нет доступа к шаблонам!"
         )
     
     # Обогащаем данные
@@ -146,7 +146,7 @@ async def get_recurring_pattern(
     if not check_teacher_access(current_user, pattern.teacher_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this pattern"
+            detail="У вас нет доступа к этому шаблону!"
         )
     
     student_ids = await pattern_service.get_pattern_student_ids(pattern.id)
@@ -182,7 +182,7 @@ async def update_recurring_pattern(
     if not check_teacher_access(current_user, pattern.teacher_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this pattern"
+            detail="У вас нет доступа к этому шаблону!"
         )
     
     updated_pattern = await pattern_service.update_pattern(pattern_id, data)
@@ -219,12 +219,12 @@ async def delete_recurring_pattern(
     if not check_teacher_access(current_user, pattern.teacher_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this pattern"
+            detail="У вас нет доступа к этому шаблону!"
         )
     
     await pattern_service.delete_pattern(pattern_id)
     
     return SuccessResponse(
         success=True,
-        message=f"Recurring pattern {pattern_id} deleted successfully"
+        message=f"Шаблон повторяющихся занятий {pattern_id} удалён!"
     )

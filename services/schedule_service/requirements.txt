@@ -26,4 +26,6 @@ httpx==0.28.1
 
 # Утилиты
 pytz==2024.2
-aio-pika==9.4.3 #publisher для нотификаций
+
+# publisher для нотификаций
+aio-pika==9.4.3 
