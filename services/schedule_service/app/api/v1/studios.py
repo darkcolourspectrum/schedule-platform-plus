@@ -44,13 +44,28 @@ async def list_studios(
     service: MembershipService = Depends(_get_membership_service),
 ):
     """
-    Список активных студий, доступных текущему пользователю.
+    Список активных студий, доступных текущему пользователю,
+    с подсчитанным количеством преподавателей, учеников и кабинетов.
     
     Admin: все активные студии.
     Teacher/Student: только их собственная студия.
     """
-    studios = await service.get_studios_for_user(current_user)
-    return studios
+    items = await service.get_studios_for_user_with_counts(current_user)
+    return [
+        StudioInfo(
+            id=item["studio"].id,
+            name=item["studio"].name,
+            description=item["studio"].description,
+            address=item["studio"].address,
+            phone=item["studio"].phone,
+            email=item["studio"].email,
+            is_active=item["studio"].is_active,
+            teachers_count=item["teachers_count"],
+            students_count=item["students_count"],
+            classrooms_count=item["classrooms_count"],
+        )
+        for item in items
+    ]
 
 
 @router.get(

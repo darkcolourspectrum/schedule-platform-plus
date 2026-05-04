@@ -58,6 +58,76 @@ class MembershipService:
             active_only=True,
         )
     
+    async def get_studios_for_user_with_counts(
+        self,
+        user: dict,
+    ) -> List[dict]:
+        """
+        Получить студии пользователя с подсчитанным количеством членов
+        и кабинетов. Используется для отображения карточек студий в UI.
+        
+        Возвращает список dict-ов вида:
+            {
+                'studio': StudioCache,
+                'teachers_count': int,
+                'students_count': int,
+                'classrooms_count': int,
+            }
+        """
+        from sqlalchemy import select, func
+        from app.models.user_cache import UserCache
+        from app.models.classroom_cache import ClassroomCache
+        
+        studios = await self.get_studios_for_user(user)
+        if not studios:
+            return []
+        
+        studio_ids = [s.id for s in studios]
+        
+        # Считаем активных членов студий батчем.
+        members_stmt = (
+            select(
+                UserCache.studio_id,
+                UserCache.role_name,
+                func.count(UserCache.id).label("cnt"),
+            )
+            .where(UserCache.studio_id.in_(studio_ids))
+            .where(UserCache.is_active.is_(True))
+            .group_by(UserCache.studio_id, UserCache.role_name)
+        )
+        members_result = await self.db.execute(members_stmt)
+        
+        teachers_by_studio: dict[int, int] = {}
+        students_by_studio: dict[int, int] = {}
+        for studio_id, role_name, cnt in members_result.all():
+            if role_name == "teacher":
+                teachers_by_studio[studio_id] = cnt
+            elif role_name == "student":
+                students_by_studio[studio_id] = cnt
+        
+        # Считаем активные кабинеты батчем.
+        classrooms_stmt = (
+            select(
+                ClassroomCache.studio_id,
+                func.count(ClassroomCache.id).label("cnt"),
+            )
+            .where(ClassroomCache.studio_id.in_(studio_ids))
+            .where(ClassroomCache.is_active.is_(True))
+            .group_by(ClassroomCache.studio_id)
+        )
+        classrooms_result = await self.db.execute(classrooms_stmt)
+        classrooms_by_studio = {sid: cnt for sid, cnt in classrooms_result.all()}
+        
+        return [
+            {
+                "studio": s,
+                "teachers_count": teachers_by_studio.get(s.id, 0),
+                "students_count": students_by_studio.get(s.id, 0),
+                "classrooms_count": classrooms_by_studio.get(s.id, 0),
+            }
+            for s in studios
+        ]
+
     async def get_studio_classrooms(
         self,
         studio_id: int,

@@ -19,7 +19,15 @@ class StudioInfo(BaseModel):
     name: str
     description: Optional[str] = None
     address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
     is_active: bool
+    
+    # Computed - количество членов студии (для отображения в карточке).
+    # Заполняется в endpoint'е через MembershipService.
+    teachers_count: int = 0
+    students_count: int = 0
+    classrooms_count: int = 0
 
 
 class ClassroomInfo(BaseModel):
