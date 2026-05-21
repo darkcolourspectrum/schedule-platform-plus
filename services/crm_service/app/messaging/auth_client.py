@@ -59,6 +59,7 @@ class AuthServiceClient:
         first_name: str,
         last_name: str,
         phone: Optional[str] = None,
+        studio_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Создать provisioned-пользователя в Auth Service.
@@ -79,6 +80,7 @@ class AuthServiceClient:
             "first_name": first_name,
             "last_name": last_name,
             "phone": phone,
+            "studio_id": studio_id,
         }
 
         try:

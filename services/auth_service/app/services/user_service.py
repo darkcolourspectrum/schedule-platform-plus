@@ -239,6 +239,7 @@ class UserService:
         first_name: str,
         last_name: str,
         phone: Optional[str] = None,
+        studio_id: Optional[int] = None,
     ) -> User:
         """
         Создать provisioned-пользователя (без пароля).
@@ -278,6 +279,7 @@ class UserService:
                 role_id=student_role.id,
                 hashed_password=None,
                 phone=phone,
+                studio_id=studio_id,
             )
 
             # Событие в outbox в той же транзакции.

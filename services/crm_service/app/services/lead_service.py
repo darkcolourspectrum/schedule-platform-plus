@@ -10,6 +10,7 @@
 """
 
 import logging
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,10 +34,12 @@ from app.messaging.outbox import (
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.repositories.lead import LeadRepository
+from app.repositories.studio_cache import StudioCacheRepository
 from app.repositories.user_cache import UserCacheRepository
 from app.schemas.lead import (
     LeadActivityCreate,
     LeadConversionResponse,
+    LeadConvertRequest,
     LeadDetailResponse,
     LeadListResponse,
     LeadPublicCreate,
@@ -55,6 +58,7 @@ class LeadService:
         self.db = db
         self.repo = LeadRepository(db)
         self.user_cache = UserCacheRepository(db)
+        self.studio_cache = StudioCacheRepository(db)
 
     async def create_from_public_request(self, data: LeadPublicCreate) -> Lead:
         """
@@ -408,6 +412,7 @@ class LeadService:
         self,
         lead_id: int,
         admin_user_id: int,
+        data: Optional[LeadConvertRequest] = None,
     ) -> LeadConversionResponse:
         """
         Конвертировать лид в клиента (provisioned-пользователя).
@@ -415,6 +420,12 @@ class LeadService:
         Создаёт в Auth Service пользователя без пароля, привязывает его
         к лиду (converted_user_id) и переводит лид в статус
         trial_scheduled - готов к записи на первое занятие.
+
+        Тело запроса (data) опционально: если поле не передано - берётся
+        из лида. После слияния body+лида обязаны быть заполнены email и
+        studio_id, иначе создать юзера в Auth невозможно. studio_id
+        дополнительно проверяется по локальному кешу studios_cache
+        (студия должна существовать и быть активной).
 
         Идемпотентность: если лид уже сконвертирован (converted_user_id
         заполнен) - повторный вызов не создаёт второго пользователя,
@@ -432,7 +443,8 @@ class LeadService:
 
         Raises:
             LeadNotFoundError: лида нет.
-            ConversionError: лид в статусе lost, либо сбой/конфликт Auth.
+            ConversionError: лид в статусе lost, недостающие/невалидные
+                данные (email, studio_id), либо сбой/конфликт Auth.
         """
         lead = await self.get_lead(lead_id)
 
@@ -454,15 +466,47 @@ class LeadService:
                 f"Lead {lead_id} is lost and cannot be converted"
             )
 
-        first_name, last_name = self._split_name(lead.name)
+        # Сливаем body + данные лида. Поля из body побеждают; если поле
+        # не передано - дефолт из лида.
+        data = data or LeadConvertRequest()
+
+        if data.first_name and data.last_name:
+            first_name, last_name = data.first_name, data.last_name
+        else:
+            split_first, split_last = self._split_name(lead.name)
+            first_name = data.first_name or split_first
+            last_name = data.last_name or split_last
+
+        email = data.email or lead.email
+        phone = data.phone if data.phone is not None else lead.phone
+        studio_id = data.studio_id or lead.studio_id
+
+        # Финальная валидация: после слияния body+лида email и studio_id
+        # обязаны быть, иначе создать юзера в Auth невозможно.
+        if not email:
+            raise ConversionError(
+                f"Cannot convert lead {lead_id}: email is required "
+                f"(neither in request body nor in lead)"
+            )
+        if studio_id is None:
+            raise ConversionError(
+                f"Cannot convert lead {lead_id}: studio_id is required "
+                f"(neither in request body nor in lead)"
+            )
+        if not await self.studio_cache.exists_and_active(studio_id):
+            raise ConversionError(
+                f"Cannot convert lead {lead_id}: studio {studio_id} "
+                f"does not exist or is inactive"
+            )
 
         # Необратимый шаг: создаём пользователя в Auth Service.
         try:
             user_data = await auth_client.provision_user(
-                email=lead.email,
+                email=email,
                 first_name=first_name,
                 last_name=last_name,
-                phone=lead.phone,
+                phone=phone,
+                studio_id=studio_id,
             )
         except AuthServiceUserConflict as exc:
             raise ConversionError(

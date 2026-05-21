@@ -250,6 +250,7 @@ async def provision_user_internal(
             first_name=request.first_name,
             last_name=request.last_name,
             phone=request.phone,
+            studio_id=request.studio_id,
         )
     except UserAlreadyExistsException:
         raise HTTPException(

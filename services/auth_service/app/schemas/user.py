@@ -155,3 +155,7 @@ class UserProvisionRequest(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=100, description="Имя")
     last_name: str = Field(..., min_length=1, max_length=100, description="Фамилия")
     phone: Optional[str] = Field(None, max_length=20, description="Телефон")
+    studio_id: Optional[int] = Field(
+        None,
+        description="ID студии (филиала). Если передан — юзер сразу привязывается к филиалу.",
+    )
