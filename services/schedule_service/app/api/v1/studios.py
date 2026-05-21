@@ -47,8 +47,8 @@ async def list_studios(
     Список активных студий, доступных текущему пользователю,
     с подсчитанным количеством преподавателей, учеников и кабинетов.
     
-    Admin: все активные студии.
-    Teacher/Student: только их собственная студия.
+    Admin все активные студии.
+    Teacher/Student только их собственная студия.
     """
     items = await service.get_studios_for_user_with_counts(current_user)
     return [

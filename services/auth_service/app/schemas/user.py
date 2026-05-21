@@ -136,3 +136,22 @@ class UserRoleUpdateRequest(BaseModel):
 class UserStudioAssignRequest(BaseModel):
     """Запрос на привязку пользователя к студии (внутренний endpoint)"""
     studio_id: int = Field(..., description="ID студии")
+
+class UserProvisionRequest(BaseModel):
+    """
+    Схема запроса на создание provisioned-пользователя.
+
+    Provisioned-пользователь - аккаунт, заведённый внутренним сервисом
+    (CRM) для лида, ставшего клиентом. У него нет пароля: вход он получит
+    позже через сценарий активации аккаунта.
+
+    Создаётся всегда с ролью студента (как и любой новый аккаунт на
+    платформе - повышение роли это отдельное действие админа).
+
+    Используется внутренним эндпоинтом, защищённым X-Internal-API-Key.
+    """
+
+    email: EmailStr = Field(..., description="Email будущего пользователя")
+    first_name: str = Field(..., min_length=1, max_length=100, description="Имя")
+    last_name: str = Field(..., min_length=1, max_length=100, description="Фамилия")
+    phone: Optional[str] = Field(None, max_length=20, description="Телефон")

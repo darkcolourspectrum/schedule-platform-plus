@@ -4,10 +4,11 @@ import logging
 
 from app.repositories.user_repository import UserRepository
 from app.repositories.role_repository import RoleRepository
-from app.core.exceptions import UserNotFoundException
+from app.core.exceptions import UserNotFoundException, UserAlreadyExistsException
 from app.schemas.user import UserUpdate, UserListItem
 from app.models.user import User
 from app.messaging.outbox import (
+    record_user_created,
     record_user_updated,
     record_user_deactivated,
     record_role_changed,
@@ -231,3 +232,68 @@ class UserService:
             raise
         
         return await self.user_repo.get_by_id(user_id, relationships=["role"])
+    
+    async def provision_user(
+        self,
+        email: str,
+        first_name: str,
+        last_name: str,
+        phone: Optional[str] = None,
+    ) -> User:
+        """
+        Создать provisioned-пользователя (без пароля).
+
+        Используется внутренними сервисами (CRM) для заведения аккаунта
+        лида, ставшего клиентом. В отличие от register_user:
+            - не требует и не устанавливает пароль (hashed_password=None);
+            - не создаёт токены и refresh-token;
+            - роль всегда student (как любой новый аккаунт платформы).
+
+        Пользователь создаётся активным (is_active=True), но неверифи-
+        цированным (is_verified=False) - вход он получит позже через
+        сценарий активации аккаунта.
+
+        Событие user.created пишется в outbox в той же транзакции.
+
+        Raises:
+            UserAlreadyExistsException: email уже занят.
+
+        Returns:
+            Созданный User.
+        """
+        existing_user = await self.user_repo.get_by_email(email)
+        if existing_user:
+            raise UserAlreadyExistsException()
+
+        student_role = await self.role_repo.get_default_student_role()
+        if not student_role:
+            raise Exception("Default student role not found")
+
+        try:
+            # Создание пользователя без пароля (flush -> id есть, без commit).
+            user = await self.user_repo.create_user(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                role_id=student_role.id,
+                hashed_password=None,
+                phone=phone,
+            )
+
+            # Событие в outbox в той же транзакции.
+            await record_user_created(self.db, user, role_name=student_role.name)
+
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        # Перечитываем пользователя со связью role: UserProfile.from_orm
+        # обращается к user.role, а после commit ленивая связь в async
+        # уже не подгружается.
+        user = await self.user_repo.get_by_id(user.id, relationships=["role"])
+
+        logger.info(
+            "Provisioned user created: id=%s email=%s", user.id, user.email
+        )
+        return user

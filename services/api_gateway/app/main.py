@@ -39,6 +39,7 @@ SERVICES = {
     "schedule": settings.schedule_service_url,
     "admin": settings.admin_service_url,
     "notifications": settings.notification_service_url,
+    "crm": settings.crm_service_url,
 }
 
 

@@ -18,6 +18,11 @@ CREATE USER schedule_user WITH PASSWORD 'schedule_password';
 CREATE DATABASE schedule_service_db OWNER schedule_user;
 GRANT ALL PRIVILEGES ON DATABASE schedule_service_db TO schedule_user;
 
+-- CRM Service Database
+CREATE USER crm_user WITH PASSWORD 'crm_password';
+CREATE DATABASE crm_service_db OWNER crm_user;
+GRANT ALL PRIVILEGES ON DATABASE crm_service_db TO crm_user;
+
 -- Подключаемся к каждой БД и даем права пользователям
 
 -- Auth Service permissions
@@ -67,6 +72,13 @@ GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO notification_user;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO notification_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO notification_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO notification_user;
+
+\connect crm_service_db;
+GRANT ALL ON SCHEMA public TO crm_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO crm_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO crm_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO crm_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO crm_user;
 
 -- Возвращаемся к postgres БД
 \connect postgres;

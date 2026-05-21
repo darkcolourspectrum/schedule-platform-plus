@@ -1,0 +1,39 @@
+# FastAPI и веб-сервер
+fastapi==0.115.9
+uvicorn==0.34.0
+starlette==0.45.3
+
+# База данных и ORM
+SQLAlchemy==2.0.38
+asyncpg==0.30.0
+alembic==1.14.1
+
+# Redis (для shared/auth_lib blacklist)
+redis==5.0.1
+
+# Pydantic
+pydantic==2.10.6
+pydantic_core==2.27.2
+pydantic-settings==2.8.1
+
+# Конфигурация
+python-dotenv==1.0.1
+
+# JWT (для валидации токенов через shared/auth_lib)
+python-jose[cryptography]==3.4.0
+
+# RabbitMQ (используется с шага 3 - outbox/consumer)
+aio-pika==9.4.3
+
+# HTTP-клиент для межсервисных вызовов (CRM -> auth, шаг 6)
+httpx==0.28.1
+
+# Валидация email (для опционального поля email в схеме Lead)
+email_validator==2.2.0
+
+# Работа с датами
+python-dateutil==2.9.0
+
+# Тестирование (для разработки)
+pytest==7.4.3
+pytest-asyncio==0.21.1

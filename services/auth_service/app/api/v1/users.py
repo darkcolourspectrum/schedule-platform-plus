@@ -14,11 +14,12 @@ from app.schemas.user import (
     UserUpdate,
     UserRoleUpdateRequest,
     UserStudioAssignRequest,
+    UserProvisionRequest,
 )
 from app.repositories.role_repository import RoleRepository
 from app.database.connection import get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.exceptions import UserNotFoundException
+from app.core.exceptions import UserNotFoundException, UserAlreadyExistsException
 from app.models.user import User
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -220,3 +221,40 @@ async def deactivate_user_internal(
     """
     updated_user = await user_service.deactivate_user(user_id)
     return UserProfile.from_orm(updated_user)
+
+@router.post(
+    "/provision",
+    response_model=UserProfile,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создание provisioned-пользователя (внутренний endpoint)",
+    description="Доступно только для внутренних сервисов с X-Internal-API-Key. "
+    "Создаёт аккаунт без пароля для лида, ставшего клиентом (используется "
+    "CRM Service при конвертации лида).",
+)
+async def provision_user_internal(
+    request: UserProvisionRequest,
+    internal_key_valid: bool = Depends(verify_internal_api_key),
+    user_service: UserService = Depends(get_user_service),
+):
+    """
+    Создать provisioned-пользователя для внутреннего сервиса.
+
+    Пользователь создаётся без пароля, с ролью студента. Публикует
+    событие user.created в outbox.
+
+    Возвращает 409, если email уже занят.
+    """
+    try:
+        user = await user_service.provision_user(
+            email=request.email,
+            first_name=request.first_name,
+            last_name=request.last_name,
+            phone=request.phone,
+        )
+    except UserAlreadyExistsException:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User with email '{request.email}' already exists",
+        )
+
+    return UserProfile.from_orm(user)
