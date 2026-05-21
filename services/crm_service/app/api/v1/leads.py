@@ -6,21 +6,24 @@ API-эндпоинты для работы с лидами.
 поэтому снаружи пути выглядят как /api/crm/leads/...
 
 Эндпоинты:
-    POST   /leads/public            - публичный, приём заявки с лендинга
-    GET    /leads                   - admin, список лидов с фильтрами
-    GET    /leads/{id}              - admin, карточка лида с журналом
-    PATCH  /leads/{id}              - admin, правка assigned_to/notes
-    PATCH  /leads/{id}/status       - admin, смена статуса воронки
-    POST   /leads/{id}/activities   - admin, добавить заметку/звонок
+    POST   /leads/public               - публичный, приём заявки с лендинга
+    GET    /leads                      - admin, список лидов с фильтрами
+    GET    /leads/{id}                 - admin, карточка лида с журналом
+    PATCH  /leads/{id}                 - admin, правка assigned_to/notes
+    PATCH  /leads/{id}/status          - admin, смена статуса воронки
+    POST   /leads/{id}/activities      - admin, добавить заметку/звонок
+    POST   /leads/{id}/convert-to-user - admin, конвертация лида в клиента
+    GET    /studios                    - admin, список активных студий
+                                         (для select в модалке конвертации)
 
 Роутер не ловит доменные исключения сам - их транслируют в HTTP-коды
 централизованные exception handlers, зарегистрированные в main.py.
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 
 from app.core.enums import LeadStatus
 from app.dependencies import get_current_admin, get_lead_service
@@ -28,18 +31,26 @@ from app.schemas.lead import (
     LeadActivityCreate,
     LeadActivityResponse,
     LeadConversionResponse,
+    LeadConvertRequest,
     LeadDetailResponse,
     LeadListResponse,
     LeadPublicCreate,
     LeadResponse,
     LeadStatusUpdate,
     LeadUpdate,
+    StudioOption,
 )
 from app.services.lead_service import LeadService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
+
+# Отдельный роутер для справочников (без префикса /leads).
+# Сейчас здесь только список студий из локального кеша - его дёргает
+# модалка конвертации на фронте. Если справочников станет больше -
+# имеет смысл вынести в отдельный файл api/v1/studios.py.
+studios_router = APIRouter(prefix="/studios", tags=["Studios"])
 
 
 # ==================== ПУБЛИЧНЫЙ ЭНДПОИНТ ====================
@@ -178,16 +189,43 @@ async def add_lead_activity(
     response_model=LeadConversionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Конвертировать лид в клиента",
-    description="Создаёт в Auth Service пользователя (без пароля) для лида, "
-    "привязывает его к лиду и переводит лид в статус trial_scheduled. "
-    "Идемпотентно: повторный вызов не создаёт второго пользователя.",
+    description=(
+        "Создаёт в Auth Service пользователя (без пароля) для лида, "
+        "привязывает его к лиду и переводит лид в статус trial_scheduled. "
+        "Идемпотентно: повторный вызов не создаёт второго пользователя. "
+        "Тело запроса опционально: любое поле, не переданное в body, "
+        "будет взято из лида. После слияния обязательны email и studio_id."
+    ),
 )
 async def convert_lead_to_user(
     lead_id: int,
+    data: Optional[LeadConvertRequest] = Body(default=None),
     admin: dict = Depends(get_current_admin),
     lead_service: LeadService = Depends(get_lead_service),
 ) -> LeadConversionResponse:
     """Конвертировать лид в provisioned-пользователя."""
     return await lead_service.convert_to_user(
-        lead_id, admin_user_id=admin["user_id"]
+        lead_id, admin_user_id=admin["user_id"], data=data,
     )
+
+
+# ==================== СПРАВОЧНИКИ ====================
+
+
+@studios_router.get(
+    "",
+    response_model=List[StudioOption],
+    summary="Список активных студий",
+    description=(
+        "Возвращает все активные студии из локального кеша "
+        "(studios_cache, синхронизируется через admin_events). "
+        "Используется фронтом для select студии в модалке конвертации лида."
+    ),
+)
+async def list_active_studios(
+    _admin: dict = Depends(get_current_admin),
+    lead_service: LeadService = Depends(get_lead_service),
+) -> List[StudioOption]:
+    """Получить список активных студий из локального кеша."""
+    studios = await lead_service.studio_cache.get_all_active()
+    return [StudioOption.model_validate(s) for s in studios]

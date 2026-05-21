@@ -301,32 +301,3 @@ class StudioOption(BaseModel):
 
     id: int
     name: str
-class LeadConvertRequest(BaseModel):
-    """
-    Тело запроса конвертации лида в клиента.
-
-    Все поля опциональны: если поле не передано, оно берётся из лида.
-    После применения дефолтов из лида:
-        - email обязателен (иначе нельзя создать юзера в Auth);
-        - studio_id обязателен (юзер должен быть привязан к филиалу).
-
-    Эти проверки делает сервисный слой (lead_service.convert_to_user),
-    а не Pydantic - чтобы выдать осмысленные 400-ошибки.
-    """
-
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = Field(None, max_length=20)
-    studio_id: Optional[int] = Field(None, gt=0)
-
-
-class StudioOption(BaseModel):
-    """Студия для отображения в select на фронте (модалка конвертации)."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    name: str

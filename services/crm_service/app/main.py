@@ -107,6 +107,7 @@ app.add_middleware(
 )
 
 app.include_router(leads.router, prefix="/api/v1")
+app.include_router(leads.studios_router, prefix="/api/v1")
 
 
 # ==================== EXCEPTION HANDLERS ====================
