@@ -68,16 +68,20 @@ class AdminEventConsumer:
         await self._channel.set_qos(prefetch_count=10)
 
         # DLX и DLQ для битых сообщений.
+        # DLX 'admin_events.dlx' уже создан consumer'ом Schedule Service
+        # как FANOUT - переиспользуем тот же тип. RabbitMQ не разрешает
+        # пере-объявить exchange с другими параметрами.
         dlx = await self._channel.declare_exchange(
             DLX_NAME,
-            ExchangeType.TOPIC,
+            ExchangeType.FANOUT,
             durable=True,
         )
         dlq = await self._channel.declare_queue(
             DLQ_NAME,
             durable=True,
         )
-        await dlq.bind(dlx, routing_key="#")
+        # fanout-exchange игнорирует routing_key, привязка без него.
+        await dlq.bind(dlx)
 
         # Основной exchange.
         exchange = await self._channel.declare_exchange(
