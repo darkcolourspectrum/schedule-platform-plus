@@ -463,7 +463,7 @@ class LeadService:
         # Проигранный лид конвертировать нельзя.
         if lead.status == LeadStatus.LOST.value:
             raise ConversionError(
-                f"Lead {lead_id} is lost and cannot be converted"
+                "Невозможно конвертировать проигранный лид."
             )
 
         # Сливаем body + данные лида. Поля из body побеждают; если поле
@@ -485,18 +485,18 @@ class LeadService:
         # обязаны быть, иначе создать юзера в Auth невозможно.
         if not email:
             raise ConversionError(
-                f"Cannot convert lead {lead_id}: email is required "
-                f"(neither in request body nor in lead)"
+                "Невозможно конвертировать лид: укажите email "
+                "(не передан в запросе и не указан в карточке лида)."
             )
         if studio_id is None:
             raise ConversionError(
-                f"Cannot convert lead {lead_id}: studio_id is required "
-                f"(neither in request body nor in lead)"
+                "Невозможно конвертировать лид: укажите студию "
+                "(не передана в запросе и не указана в карточке лида)."
             )
         if not await self.studio_cache.exists_and_active(studio_id):
             raise ConversionError(
-                f"Cannot convert lead {lead_id}: studio {studio_id} "
-                f"does not exist or is inactive"
+                f"Невозможно конвертировать лид: студия {studio_id} "
+                f"не существует или неактивна."
             )
 
         # Необратимый шаг: создаём пользователя в Auth Service.
@@ -508,14 +508,14 @@ class LeadService:
                 phone=phone,
                 studio_id=studio_id,
             )
-        except AuthServiceUserConflict as exc:
+        except AuthServiceUserConflict:
             raise ConversionError(
-                f"Cannot convert lead {lead_id}: {exc}"
-            ) from exc
+                f"Пользователь с email «{email}» уже зарегистрирован "
+                f"в системе."
+            )
         except AuthServiceError as exc:
             raise ConversionError(
-                f"Cannot convert lead {lead_id}, Auth Service unavailable: "
-                f"{exc}"
+                f"Сервис аутентификации недоступен. Попробуйте позже."
             ) from exc
 
         converted_user_id = user_data["id"]
