@@ -144,3 +144,89 @@ class OAuthUserInfo(BaseModel):
     first_name: str = Field(..., description="Имя")
     last_name: str = Field(..., description="Фамилия")
     avatar_url: Optional[str] = Field(None, description="URL аватара")
+
+class VkLoginRequest(BaseModel):
+    """
+    Тело входа через VK (POST /auth/vk/login).
+
+    Поля приходят с фронта из окна VK ID. Бэкенд сам обменивает их
+    на проверенный vk_id (см. vk_id_client) - фронту мы НЕ доверяем
+    vk_id напрямую.
+
+    Это схема ИМЕННО входа: ни email, ни согласия на обработку данных
+    тут нет (вход - для уже существующего аккаунта). Не путать с
+    наброском VKAuthRequest выше - тот под другой, устаревший флоу.
+    """
+
+    code: str = Field(..., description="Код авторизации из окна VK ID")
+    device_id: str = Field(..., description="device_id из окна VK ID (обязателен для обмена)")
+    code_verifier: str = Field(..., description="PKCE code_verifier, парный к code_challenge")
+    state: Optional[str] = Field(None, description="Анти-CSRF state, если фронт его слал")
+
+class VkRegisterRequest(BaseModel):
+    """
+    Тело регистрации через VK (шаг 1) — POST /auth/vk/register.
+
+    code/device_id/code_verifier — из окна VK ID, бэкенд обменивает их
+    на проверенный vk_id ОДИН раз (код одноразовый).
+
+    email — ОПЦИОНАЛЕН. Если фронт уже знает email пользователя (например,
+    пользователь его ввёл заранее), он его шлёт. Если нет — бэкенд попробует
+    взять email из данных VK; а если и там нет — вернёт ответ needs_email,
+    и регистрация завершится вторым шагом (vk/register/complete).
+    """
+
+    code: str = Field(..., description="Код авторизации из окна VK ID")
+    device_id: str = Field(..., description="device_id из окна VK ID")
+    code_verifier: str = Field(..., description="PKCE code_verifier")
+    state: Optional[str] = Field(None, description="Анти-CSRF state, если фронт его слал")
+    email: Optional[EmailStr] = Field(None, description="Email, если уже известен фронту")
+
+
+class VkRegisterCompleteRequest(BaseModel):
+    """
+    Тело завершения регистрации через VK (шаг 2) — POST /auth/vk/register/complete.
+
+    Используется, когда на шаге 1 email не был получен. registration_token —
+    выданный нами на шаге 1 короткоживущий токен с УЖЕ проверенным vk_id и
+    именем/фамилией. Повторный обмен кода не нужен (и невозможен) — vk_id
+    берётся из подписанного нами токена.
+    """
+
+    registration_token: str = Field(..., description="Токен с шага 1")
+    email: EmailStr = Field(..., description="Email, введённый пользователем")
+
+
+class VkRegisterResponse(BaseModel):
+    """
+    Ответ шага 1 регистрации.
+
+    Один из двух исходов:
+      - completed=True: аккаунт создан, в auth и tokens лежат данные входа
+        (как в AuthResponse). needs_email=False.
+      - needs_email=True: email не получен, аккаунт НЕ создан. Фронт должен
+        показать поле email и вызвать vk/register/complete с registration_token.
+        first_name/last_name даны для предзаполнения формы.
+    """
+
+    needs_email: bool
+    # Заполняется, если аккаунт создан (needs_email=False):
+    auth: Optional[AuthResponse] = None
+    # Заполняется, если нужен второй шаг (needs_email=True):
+    registration_token: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    
+class VkLinkRequest(BaseModel):
+    """
+    Тело привязки VK к существующему аккаунту (POST /users/{id}/link-vk).
+
+    Вызывается залогиненным пользователем из своего профиля. code/device_id/
+    code_verifier - из окна VK ID; бэкенд обменивает их на проверенный vk_id.
+    Email/имя тут НЕ нужны - аккаунт уже существует, меняется только привязка.
+    """
+
+    code: str = Field(..., description="Код авторизации из окна VK ID")
+    device_id: str = Field(..., description="device_id из окна VK ID")
+    code_verifier: str = Field(..., description="PKCE code_verifier")
+    state: Optional[str] = Field(None, description="Анти-CSRF state, если фронт его слал")

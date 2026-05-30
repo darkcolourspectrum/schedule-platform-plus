@@ -173,3 +173,60 @@ def create_tokens_for_user(
         "refresh_token": refresh_token,
         "token_type": "bearer"
     }
+
+def create_vk_registration_token(
+    vk_id: str,
+    first_name: str,
+    last_name: str,
+    vk_email: Optional[str] = None,
+) -> str:
+    """
+    Короткоживущий токен для второго шага VK-регистрации.
+
+    Зачем: код VK одноразовый. Если при регистрации email от VK не пришёл,
+    мы не можем обменять код повторно после ввода email вручную. Поэтому
+    после единственного обмена кода мы упаковываем УЖЕ ПРОВЕРЕННЫЙ vk_id
+    (и имя/фамилию) в подписанный нами токен и отдаём фронту. Фронт вернёт
+    его вместе с введённым email - и мы создадим аккаунт, доверяя vk_id из
+    токена (он подписан нашим ключом, подделать нельзя).
+
+    Живёт 10 минут - этого хватает на ввод email, и не больше.
+    """
+    expire = datetime.utcnow() + timedelta(minutes=10)
+    payload = {
+        "vk_id": vk_id,
+        "first_name": first_name,
+        "last_name": last_name,
+        "vk_email": vk_email,
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "jti": str(uuid.uuid4()),
+        "type": "vk_registration",
+    }
+    return jwt.encode(
+        payload,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+def decode_vk_registration_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Проверить токен второго шага VK-регистрации.
+
+    Возвращает payload (vk_id, first_name, last_name, vk_email), если токен
+    валиден, наш, не истёк и нужного типа. Иначе None.
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+    except JWTError:
+        return None
+
+    if payload.get("type") != "vk_registration":
+        return None
+
+    return payload

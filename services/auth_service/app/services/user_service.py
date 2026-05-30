@@ -299,3 +299,113 @@ class UserService:
             "Provisioned user created: id=%s email=%s", user.id, user.email
         )
         return user
+    
+    async def link_vk(self, user_id: int, vk_id: str) -> User:
+        """
+        Привязать vk_id к существующему пользователю.
+ 
+        Сценарий: пользователь УЖЕ залогинен (роут защищён JWT) и из своего
+        профиля подключает VK. Владение аккаунтом доказано фактом входа,
+        владение VK - окном VK ID (vk_id сюда приходит уже проверенным).
+        Поэтому слияние безопасно и без дополнительного подтверждения.
+ 
+        Защита от увода чужой привязки:
+            - если этот vk_id уже привязан к ДРУГОМУ пользователю ->
+              UserAlreadyExistsException (409): один VK = один аккаунт;
+            - если этот vk_id уже привязан к ЭТОМУ же пользователю ->
+              идемпотентно возвращаем пользователя без изменений
+              (повторная привязка того же VK - не ошибка).
+ 
+        Публикует user.updated в outbox (oauth_provider/vk_id изменились).
+ 
+        Raises:
+            UserNotFoundException: пользователя с user_id нет.
+            UserAlreadyExistsException: vk_id занят другим аккаунтом.
+ 
+        Returns:
+            Обновлённый User (со связью role).
+        """
+        user = await self.user_repo.get_by_id(user_id, relationships=["role"])
+        if not user:
+            raise UserNotFoundException()
+ 
+        # Проверка коллизии vk_id.
+        existing = await self.user_repo.get_by_vk_id(vk_id)
+        if existing is not None:
+            if existing.id == user_id:
+                # Тот же VK уже привязан к этому же юзеру - ничего не делаем.
+                logger.info(
+                    "VK already linked to this user, no-op: user_id=%s vk_id=%s",
+                    user_id, vk_id,
+                )
+                return user
+            # VK занят другим аккаунтом - привязывать нельзя.
+            raise UserAlreadyExistsException()
+ 
+        try:
+            updated_user = await self.user_repo.update(
+                user_id,
+                vk_id=vk_id,
+                oauth_provider="vk",
+            )
+            if not updated_user:
+                raise UserNotFoundException()
+ 
+            user = await self.user_repo.get_by_id(user_id, relationships=["role"])
+            await record_user_updated(self.db, user, role_name=user.role.name)
+ 
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+ 
+        logger.info("VK linked: user_id=%s vk_id=%s", user_id, vk_id)
+        return user
+ 
+    async def unlink_vk(self, user_id: int) -> User:
+        """
+        Отвязать VK от пользователя (снять vk_id и oauth_provider).
+ 
+        Делает флоу обратимым: человек может отключить VK, не теряя
+        аккаунт (если у него есть другой способ входа - пароль). Контроль
+        того, что у пользователя останется хоть один способ входа, для
+        MVP не делаем - это решение оставляем на уровень UI/продукта.
+ 
+        Идемпотентно: если VK и так не привязан, просто вернём пользователя.
+ 
+        Публикует user.updated в outbox.
+ 
+        Raises:
+            UserNotFoundException: пользователя с user_id нет.
+ 
+        Returns:
+            Обновлённый User (со связью role).
+        """
+        user = await self.user_repo.get_by_id(user_id, relationships=["role"])
+        if not user:
+            raise UserNotFoundException()
+ 
+        # Уже не привязан - идемпотентно возвращаем как есть.
+        if user.vk_id is None:
+            logger.info("VK already not linked, no-op: user_id=%s", user_id)
+            return user
+ 
+        try:
+            updated_user = await self.user_repo.update(
+                user_id,
+                vk_id=None,
+                oauth_provider=None,
+            )
+            if not updated_user:
+                raise UserNotFoundException()
+ 
+            user = await self.user_repo.get_by_id(user_id, relationships=["role"])
+            await record_user_updated(self.db, user, role_name=user.role.name)
+ 
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+ 
+        logger.info("VK unlinked: user_id=%s", user_id)
+        return user

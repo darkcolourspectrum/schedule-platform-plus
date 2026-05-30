@@ -13,7 +13,8 @@ from app.core.exceptions import (
     InvalidTokenException,
     TokenBlacklistedException,
     PrivacyPolicyNotAcceptedException,
-    RateLimitExceededException
+    RateLimitExceededException,
+    VkUserNotFoundException
 )
 from app.repositories.user_repository import (
     UserRepository,
@@ -406,3 +407,206 @@ class AuthService:
         except Exception as e:
             logger.error(f"Failed to get auth stats: {e}")
             return {"error": str(e)}
+        
+    async def vk_login(
+        self,
+        vk_id: str,
+        device_info: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Вход через VK по уже проверенному vk_id.
+
+        vk_id приходит сюда УЖЕ подтверждённым: роут обменял VK-код на
+        vk_id через id.vk.com (vk_id_client) до вызова этого метода.
+        Поэтому здесь нет ни пароля, ни счётчика попыток - владение
+        vk-аккаунтом доказано на стороне VK.
+
+        Поведение:
+            - нашли пользователя по vk_id -> выдаём пару токенов
+              (та же структура ответа, что и у login_user);
+            - не нашли -> VkUserNotFoundException (HTTP 404), по нему
+              фронт показывает регистрацию через VK.
+
+        Проверки блокировки и активности оставлены как в login_user:
+        даже владелец VK не должен входить в заблокированный/
+        деактивированный аккаунт.
+        """
+        # get_by_vk_id уже грузит relationship role - нужен для JWT и ответа.
+        user = await self.user_repo.get_by_vk_id(vk_id)
+        if not user:
+            raise VkUserNotFoundException()
+
+        if user.is_locked:
+            locked_until = user.locked_until.isoformat() if user.locked_until else None
+            raise AccountLockedException(locked_until=locked_until)
+
+        if not user.is_active:
+            raise UserInactiveException()
+
+        try:
+            # Счётчик попыток НЕ трогаем - он относится к парольному входу.
+            await self.user_repo.update_last_login(user.id)
+
+            tokens = create_tokens_for_user(
+                user_id=user.id,
+                email=user.email,
+                role=user.role.name,
+                studio_id=user.studio_id
+            )
+
+            refresh_expires_at = datetime.utcnow() + timedelta(
+                days=settings.jwt_refresh_token_expire_days
+            )
+            await self.refresh_token_repo.create_refresh_token(
+                user_id=user.id,
+                token=tokens["refresh_token"],
+                expires_at=refresh_expires_at,
+                device_info=device_info,
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        logger.info(f"VK login: user_id={user.id} vk_id={vk_id}")
+
+        # Структура ответа ОДИН-В-ОДИН как у login_user/register_user.
+        return {
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "role": user.role.name,
+                "studio_id": user.studio_id,
+                "studio_name": None,
+                "is_active": user.is_active,
+                "is_verified": user.is_verified
+            },
+            "tokens": tokens
+        }
+    
+    async def vk_register(
+        self,
+        vk_id: str,
+        email: str,
+        first_name: str,
+        last_name: str,
+        device_info: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Регистрация нового пользователя через VK.
+ 
+        vk_id приходит УЖЕ проверенным (роут обменял VK-код через
+        vk_id_client). email/first_name/last_name приходят от фронта:
+        имя и фамилию фронт берёт из VK SDK, email - из VK (если он там
+        есть) либо введён человеком на втором шаге формы. К этому методу
+        email всегда непустой - это гарантирует схема запроса.
+ 
+        Создаёт аккаунт без пароля (вход - только через VK), роль student,
+        проставляет vk_id и oauth_provider="vk". Выдаёт пару токенов и
+        сохраняет refresh - чтобы человек сразу оказался залогинен после
+        регистрации (как в register_user).
+ 
+        Коллизии (обе - ожидаемые штатные ситуации, не баги):
+            - vk_id уже привязан к какому-то аккаунту -> UserAlreadyExistsException.
+              Это значит "у тебя уже есть аккаунт через этот VK, используй вход".
+            - email уже занят -> UserAlreadyExistsException.
+              Это значит "аккаунт на этот email уже есть, войди обычным
+              способом и привяжи VK в профиле" (молчаливое слияние здесь
+              запрещено - защита от увода чужого аккаунта).
+ 
+        Обе коллизии используют один тип исключения (409). Текстовую
+        развилку для пользователя ("используйте вход" vs "привяжите в
+        профиле") даёт фронт по контексту экрана; при необходимости позже
+        введём два разных исключения. Для MVP 409 в обоих случаях достаточно.
+ 
+        Raises:
+            UserAlreadyExistsException: vk_id или email уже заняты.
+ 
+        Returns:
+            Dict {user, tokens} - та же структура, что у register_user/vk_login.
+        """
+        # Коллизия 1: vk_id уже привязан. Проверяем первой - это более
+        # специфичный конфликт именно для VK-регистрации.
+        existing_by_vk = await self.user_repo.get_by_vk_id(vk_id)
+        if existing_by_vk:
+            raise UserAlreadyExistsException()
+ 
+        # Коллизия 2: email уже занят (тем же путём, что register_user).
+        existing_by_email = await self.user_repo.get_by_email(email)
+        if existing_by_email:
+            raise UserAlreadyExistsException()
+ 
+        student_role = await self.role_repo.get_default_student_role()
+        if not student_role:
+            raise Exception("Default student role not found")
+ 
+        try:
+            # Создание пользователя без пароля, с vk_id и провайдером.
+            user = await self.user_repo.create_user(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                role_id=student_role.id,
+                hashed_password=None,
+                vk_id=vk_id,
+                oauth_provider="vk",
+            )
+ 
+            # Токены - та же функция, что в register_user/login_user.
+            tokens = create_tokens_for_user(
+                user_id=user.id,
+                email=user.email,
+                role=student_role.name,
+                studio_id=user.studio_id,
+            )
+ 
+            # Сохранение refresh-токена.
+            refresh_expires_at = datetime.utcnow() + timedelta(
+                days=settings.jwt_refresh_token_expire_days
+            )
+            await self.refresh_token_repo.create_refresh_token(
+                user_id=user.id,
+                token=tokens["refresh_token"],
+                expires_at=refresh_expires_at,
+                device_info=device_info,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+ 
+            # Событие user.created в той же транзакции.
+            await record_user_created(self.db, user, role_name=student_role.name)
+ 
+            # Атомарный commit: пользователь + refresh + outbox-событие.
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+ 
+        logger.info(
+            "VK register: user_id=%s vk_id=%s email=%s", user.id, vk_id, email
+        )
+ 
+        # Структура ответа ОДИН-В-ОДИН как register_user/login_user/vk_login.
+        return {
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "role": student_role.name,
+                "studio_id": user.studio_id,
+                "studio_name": None,
+                "is_active": user.is_active,
+                "is_verified": user.is_verified,
+            },
+            "tokens": tokens,
+        }

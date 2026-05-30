@@ -22,6 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import UserNotFoundException, UserAlreadyExistsException
 from app.models.user import User
 
+from app.schemas.auth import VkLinkRequest
+from app.schemas.user import UserProfile
+from app.services.vk_id_client import vk_id_client, VkIdError
+from fastapi.responses import JSONResponse
+
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
@@ -85,6 +90,82 @@ async def update_my_profile(
     
     return UserProfile.from_orm(updated_user)
 
+@router.post(
+    "/{user_id}/link-vk",
+    response_model=UserProfile,
+    summary="Привязка VK к аккаунту",
+    description=(
+        "Привязывает VK к аккаунту текущего пользователя. Принимает "
+        "code/device_id/code_verifier из окна VK, серверно обменивает их "
+        "на проверенный vk_id и проставляет его пользователю. "
+        "409 - этот VK уже привязан к другому аккаунту. "
+        "Привязать можно только СВОЙ аккаунт (user_id из пути должен "
+        "совпадать с текущим пользователем)."
+    ),
+)
+async def link_vk(
+    user_id: int,
+    payload: VkLinkRequest,
+    current_user: User = Depends(get_current_user),
+    user_service: UserService = Depends(get_user_service),
+):
+    """
+    Привязка VK к своему аккаунту.
+
+    Защита: user_id в пути обязан совпадать с id текущего пользователя -
+    нельзя привязать VK к чужому аккаунту, даже зная его id.
+    """
+    if user_id != current_user.id:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "You can only link VK to your own account"},
+        )
+
+    # Обмен кода на проверенный vk_id.
+    try:
+        vk_result = await vk_id_client.exchange_code(
+            code=payload.code,
+            device_id=payload.device_id,
+            code_verifier=payload.code_verifier,
+            state=payload.state,
+        )
+    except VkIdError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": f"VK authorization failed: {exc}"},
+        )
+
+    # Привязка. Коллизия (VK занят другим) -> UserAlreadyExistsException (409).
+    updated_user = await user_service.link_vk(
+        user_id=user_id,
+        vk_id=vk_result.vk_id,
+    )
+    return UserProfile.from_orm(updated_user)
+
+
+@router.post(
+    "/{user_id}/unlink-vk",
+    response_model=UserProfile,
+    summary="Отвязка VK от аккаунта",
+    description=(
+        "Снимает привязку VK у текущего пользователя. Отвязать можно "
+        "только свой аккаунт."
+    ),
+)
+async def unlink_vk(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    user_service: UserService = Depends(get_user_service),
+):
+    """Отвязка VK от своего аккаунта."""
+    if user_id != current_user.id:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "You can only unlink VK from your own account"},
+        )
+
+    updated_user = await user_service.unlink_vk(user_id=user_id)
+    return UserProfile.from_orm(updated_user)
 
 @router.get(
     "/{user_id}",

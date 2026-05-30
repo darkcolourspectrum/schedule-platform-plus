@@ -123,6 +123,7 @@ class CurrentUser(BaseModel):
     is_admin: bool
     is_teacher: bool
     is_student: bool
+    vk_linked: bool = False
     permissions: list[str] = Field(default_factory=list)
     
     class Config:

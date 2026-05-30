@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Response, Request, status
+from typing import Optional
 from fastapi.responses import JSONResponse
 
 from app.dependencies import (
@@ -8,6 +9,11 @@ from app.dependencies import (
     verify_internal_api_key
 )
 from app.services.auth_service import AuthService
+from app.services.vk_id_client import vk_id_client, VkIdError
+from app.core.security import (
+    create_vk_registration_token,
+    decode_vk_registration_token,
+)
 from app.core.exceptions import RateLimitExceededException
 from app.schemas.auth import (
     RegisterRequest,
@@ -16,7 +22,11 @@ from app.schemas.auth import (
     RefreshTokenRequest,
     AccessTokenResponse,
     LogoutRequest,
-    MessageResponse
+    MessageResponse,
+    VkLoginRequest,
+    VkRegisterRequest,
+    VkRegisterCompleteRequest,
+    VkRegisterResponse,
 )
 from app.schemas.user import CurrentUser
 from app.models.user import User
@@ -77,6 +87,165 @@ async def register(
             headers={"Retry-After": str(e.retry_after)}
         )
 
+@router.post(
+    "/vk/register",
+    response_model=VkRegisterResponse,
+    summary="Регистрация через VK (шаг 1)",
+    description=(
+        "Шаг 1 регистрации через VK. Обменивает код на проверенный vk_id "
+        "(один раз — код одноразовый). Если email известен (из тела запроса "
+        "или из данных VK) — создаёт аккаунт и возвращает токены "
+        "(needs_email=false). Если email нет — аккаунт не создаётся, "
+        "возвращается needs_email=true с registration_token и именем для "
+        "второго шага."
+    ),
+)
+async def vk_register(
+    payload: VkRegisterRequest,
+    request: Request,
+    response: Response,
+    client_info: dict = Depends(get_client_info),
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    """
+    Шаг 1 регистрации через VK.
+ 
+    Код обменивается РОВНО ОДИН раз. Дальше развилка по email:
+      - email есть -> создаём аккаунт сразу (vk_register) -> токены + cookie;
+      - email нет  -> возвращаем registration_token (подписанный нами,
+        с проверенным vk_id и именем) для второго шага.
+    """
+    # 1. Единственный обмен кода. Достаём vk_id и доступный профиль.
+    try:
+        vk_result = await vk_id_client.exchange_code(
+            code=payload.code,
+            device_id=payload.device_id,
+            code_verifier=payload.code_verifier,
+            state=payload.state,
+        )
+    except VkIdError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": f"VK authorization failed: {exc}"},
+        )
+ 
+    # Имя/фамилия: берём из данных VK, с безопасными запасными значениями
+    # (VK обычно их отдаёт; пустые строки на крайний случай, чтобы не упасть).
+    first_name = vk_result.first_name or ""
+    last_name = vk_result.last_name or ""
+ 
+    # 2. Определяем итоговый email: приоритет — тело запроса, затем VK.
+    final_email = payload.email or vk_result.email
+ 
+    # 3a. Email нет ниоткуда -> второй шаг. Аккаунт НЕ создаём.
+    if not final_email:
+        registration_token = create_vk_registration_token(
+            vk_id=vk_result.vk_id,
+            first_name=first_name,
+            last_name=last_name,
+            vk_email=vk_result.email,
+        )
+        return VkRegisterResponse(
+            needs_email=True,
+            registration_token=registration_token,
+            first_name=first_name,
+            last_name=last_name,
+        )
+ 
+    # 3b. Email есть -> создаём аккаунт сразу.
+    result = await auth_service.vk_register(
+        vk_id=vk_result.vk_id,
+        email=final_email,
+        first_name=first_name,
+        last_name=last_name,
+        device_info=client_info.get("device_info"),
+        ip_address=client_info.get("ip_address"),
+        user_agent=client_info.get("user_agent"),
+    )
+ 
+    response.set_cookie(
+        key="refresh_token",
+        value=result["tokens"]["refresh_token"],
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,
+    )
+ 
+    return VkRegisterResponse(
+        needs_email=False,
+        auth=AuthResponse(
+            user=result["user"],
+            tokens={
+                "access_token": result["tokens"]["access_token"],
+                "refresh_token": result["tokens"]["refresh_token"],
+                "token_type": result["tokens"]["token_type"],
+            },
+        ),
+    )
+
+@router.post(
+    "/vk/register/complete",
+    response_model=AuthResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Регистрация через VK (шаг 2)",
+    description=(
+        "Шаг 2 регистрации через VK. Вызывается, когда на шаге 1 email не "
+        "был получен. Принимает registration_token (выданный на шаге 1, с "
+        "проверенным vk_id) и введённый email. Создаёт аккаунт. Повторный "
+        "обмен кода не нужен."
+    ),
+)
+async def vk_register_complete(
+    payload: VkRegisterCompleteRequest,
+    request: Request,
+    response: Response,
+    client_info: dict = Depends(get_client_info),
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    """
+    Шаг 2 регистрации через VK.
+ 
+    vk_id берётся из registration_token (подписан нами на шаге 1, подделать
+    нельзя). Код VK тут уже не участвует — он был обменян на шаге 1.
+    """
+    # Проверяем наш токен с шага 1.
+    token_data = decode_vk_registration_token(payload.registration_token)
+    if not token_data:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "Invalid or expired registration token"},
+        )
+ 
+    # Создаём аккаунт по проверенному vk_id из токена + введённому email.
+    result = await auth_service.vk_register(
+        vk_id=token_data["vk_id"],
+        email=payload.email,
+        first_name=token_data.get("first_name") or "",
+        last_name=token_data.get("last_name") or "",
+        device_info=client_info.get("device_info"),
+        ip_address=client_info.get("ip_address"),
+        user_agent=client_info.get("user_agent"),
+    )
+ 
+    response.set_cookie(
+        key="refresh_token",
+        value=result["tokens"]["refresh_token"],
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,
+    )
+ 
+    return AuthResponse(
+        user=result["user"],
+        tokens={
+            "access_token": result["tokens"]["access_token"],
+            "refresh_token": result["tokens"]["refresh_token"],
+            "token_type": result["tokens"]["token_type"],
+        },
+    )
+
 
 @router.post(
     "/login",
@@ -128,35 +297,126 @@ async def login(
             headers={"Retry-After": str(e.retry_after)}
         )
 
+@router.post(
+    "/vk/login",
+    response_model=AuthResponse,
+    summary="Вход через VK",
+    description=(
+        "Вход в систему через VK ID. Принимает code/device_id/code_verifier "
+        "из окна VK ID на фронте, серверно обменивает их на проверенный vk_id "
+        "и выдаёт токены для уже существующего аккаунта. Если аккаунта с таким "
+        "vk_id нет - возвращает 404 (фронт показывает регистрацию через VK)."
+    ),
+)
+async def vk_login(
+    payload: VkLoginRequest,
+    request: Request,
+    response: Response,
+    client_info: dict = Depends(get_client_info),
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    """
+    Вход через VK.
+ 
+    Поток:
+        1. Обмениваем code -> проверенный vk_id (vk_id_client, поход в VK).
+        2. По vk_id находим пользователя и выдаём токены (auth_service.vk_login).
+        3. Ставим refresh в httpOnly cookie - так же, как обычный login,
+           чтобы фронтовый сценарий не отличался.
+ 
+    Коды ответов:
+        200 - вошли, тело AuthResponse;
+        404 - нет аккаунта с таким vk_id (VkUserNotFoundException из сервиса) -
+              фронт показывает регистрацию через VK;
+        400 - обмен кода не удался (VkIdError): код истёк/повторно использован,
+              неверный code_verifier/device_id и т.п.
+    """
+    # 1. Обмен кода на проверенный vk_id. Ошибки обмена -> 400 с понятным detail.
+    try:
+        vk_result = await vk_id_client.exchange_code(
+            code=payload.code,
+            device_id=payload.device_id,
+            code_verifier=payload.code_verifier,
+            state=payload.state,
+        )
+    except VkIdError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": f"VK authorization failed: {exc}"},
+        )
+ 
+    # 2. Вход по vk_id. Если пользователя нет - vk_login бросит
+    #    VkUserNotFoundException (это AuthException -> FastAPI отдаст 404).
+    result = await auth_service.vk_login(
+        vk_id=vk_result.vk_id,
+        device_info=client_info.get("device_info"),
+        ip_address=client_info.get("ip_address"),
+        user_agent=client_info.get("user_agent"),
+    )
+ 
+    # 3. Refresh в cookie - один в один как в login/register.
+    response.set_cookie(
+        key="refresh_token",
+        value=result["tokens"]["refresh_token"],
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,  # 7 дней
+    )
+ 
+    return AuthResponse(
+        user=result["user"],
+        tokens={
+            "access_token": result["tokens"]["access_token"],
+            "refresh_token": result["tokens"]["refresh_token"],
+            "token_type": result["tokens"]["token_type"],
+        },
+    )
+
 
 @router.post(
     "/refresh",
     response_model=AccessTokenResponse,
     summary="Обновление access токена",
-    description="Получение нового access токена по refresh токену"
+    description=(
+        "Получение нового access токена по refresh токену. Источник "
+        "refresh-токена: сначала httpOnly cookie (веб-фронт), затем тело "
+        "запроса (клиенты без cookie, например бот)."
+    )
 )
 async def refresh_token(
     request: Request,
-    auth_service: AuthService = Depends(get_auth_service)
+    auth_service: AuthService = Depends(get_auth_service),
+    body: Optional[RefreshTokenRequest] = None,
 ):
-    """Обновление access токена с rate limiting"""
-    
-    # Получаем refresh token из cookie
+    """Обновление access токена с rate limiting.
+
+    refresh-токен берётся приоритетно из cookie (поведение веб-фронта
+    не меняется), а если cookie нет - из тела запроса (RefreshTokenRequest).
+    Это нужно не-браузерным клиентам (бот), у которых cookie отсутствует.
+    """
+
+    # 1. Приоритет - cookie (как было раньше, поведение фронта не меняется).
     refresh_token = request.cookies.get("refresh_token")
+
+    # 2. Fallback - тело запроса, если cookie нет.
+    if not refresh_token and body is not None:
+        refresh_token = body.refresh_token
+
     if not refresh_token:
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={"detail": "Refresh token not provided"}
         )
-    
+
     try:
         result = await auth_service.refresh_access_token(refresh_token, user_id=None)
-        
+
         return AccessTokenResponse(
             access_token=result["access_token"],
             token_type=result["token_type"]
         )
-        
+
     except RateLimitExceededException as e:
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -255,6 +515,7 @@ async def get_current_user_info(
         is_admin=current_user.is_admin,
         is_teacher=current_user.is_teacher,
         is_student=current_user.is_student,
+        vk_linked=current_user.vk_id is not None,
         permissions=[]
     )
 

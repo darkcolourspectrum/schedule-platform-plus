@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = Field(30, env="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     jwt_refresh_token_expire_days: int = Field(7, env="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
     
+    # ===== VK ID (OAuth) =====
+    vk_client_id: str = Field("", env="VK_CLIENT_ID")
+    vk_redirect_uri: str = Field("", env="VK_REDIRECT_URI")
+    vk_id_base_url: str = Field("https://id.vk.com", env="VK_ID_BASE_URL")
+    vk_id_timeout: float = Field(10.0, env="VK_ID_TIMEOUT")
+
     # Application
     app_name: str = Field("Auth Service", env="APP_NAME")
     app_version: str = Field("1.0.0", env="APP_VERSION")

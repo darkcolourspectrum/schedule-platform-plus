@@ -145,3 +145,19 @@ class ValidationException(AuthException):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=detail
         )
+
+class VkUserNotFoundException(AuthException):
+    """
+    Нет пользователя с указанным vk_id.
+
+    Это не ошибка авторизации, а сигнал сценарию входа через VK:
+    аккаунта с таким vk_id ещё нет, значит нужна регистрация через VK
+    (отдельный эндпоинт), а не вход. Возвращаем 404 - по нему фронт
+    понимает, что надо показать форму регистрации через VK.
+    """
+
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account linked to this VK id"
+        )
