@@ -83,7 +83,8 @@ class UserResponse(BaseModel):
     studio_name: Optional[str] = Field(None, description="Название студии")
     is_active: bool = Field(..., description="Активность пользователя")
     is_verified: bool = Field(..., description="Статус верификации")
-    
+    vk_linked: bool = Field(False, description="Привязан ли VK")
+
     class Config:
         from_attributes = True
 

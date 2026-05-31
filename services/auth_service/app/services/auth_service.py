@@ -229,7 +229,8 @@ class AuthService:
                 "studio_id": user.studio_id,
                 "studio_name": None,
                 "is_active": user.is_active,
-                "is_verified": user.is_verified
+                "is_verified": user.is_verified,
+                "vk_linked": user.vk_id is not None
             },
             "tokens": tokens
         }
@@ -486,7 +487,8 @@ class AuthService:
                 "studio_id": user.studio_id,
                 "studio_name": None,
                 "is_active": user.is_active,
-                "is_verified": user.is_verified
+                "is_verified": user.is_verified,
+                "vk_linked": user.vk_id is not None
             },
             "tokens": tokens
         }
@@ -602,11 +604,12 @@ class AuthService:
                 "email": user.email,
                 "first_name": user.first_name,
                 "last_name": user.last_name,
-                "role": student_role.name,
+                "role": user.role.name,
                 "studio_id": user.studio_id,
                 "studio_name": None,
                 "is_active": user.is_active,
                 "is_verified": user.is_verified,
+                "vk_linked": user.vk_id is not None
             },
-            "tokens": tokens,
+            "tokens": tokens
         }
