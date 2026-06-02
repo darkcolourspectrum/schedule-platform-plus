@@ -23,6 +23,10 @@ CREATE USER crm_user WITH PASSWORD 'crm_password';
 CREATE DATABASE crm_service_db OWNER crm_user;
 GRANT ALL PRIVILEGES ON DATABASE crm_service_db TO crm_user;
 
+-- VK Bot Service Database
+CREATE USER vk_bot_user WITH PASSWORD 'vk_bot_password';
+CREATE DATABASE vk_bot_service_db OWNER vk_bot_user;
+GRANT ALL PRIVILEGES ON DATABASE vk_bot_service_db TO vk_bot_user;
 -- Подключаемся к каждой БД и даем права пользователям
 
 -- Auth Service permissions
@@ -79,6 +83,13 @@ GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO crm_user;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO crm_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO crm_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO crm_user;
+
+\connect vk_bot_service_db;
+GRANT ALL ON SCHEMA public TO vk_bot_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO vk_bot_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO vk_bot_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO vk_bot_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO vk_bot_user;
 
 -- Возвращаемся к postgres БД
 \connect postgres;

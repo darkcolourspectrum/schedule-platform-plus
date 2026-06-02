@@ -231,3 +231,7 @@ class VkLinkRequest(BaseModel):
     device_id: str = Field(..., description="device_id из окна VK ID")
     code_verifier: str = Field(..., description="PKCE code_verifier")
     state: Optional[str] = Field(None, description="Анти-CSRF state, если фронт его слал")
+
+class InternalVkLoginRequest(BaseModel):
+    """Тело внутреннего vk-login (для бота). vk_id уже доверенный."""
+    vk_id: str = Field(..., description="VK id пользователя из Long Poll сообщества")

@@ -79,6 +79,8 @@ class UserCreatedPayload(_BaseEventPayload):
     is_active: bool
     is_verified: bool
 
+    vk_id: Optional[str] = None
+
 
 class UserUpdatedPayload(_BaseEventPayload):
     """
@@ -109,6 +111,7 @@ class UserUpdatedPayload(_BaseEventPayload):
     is_active: bool
     is_verified: bool
 
+    vk_id: Optional[str] = None
 
 class UserDeactivatedPayload(_BaseEventPayload):
     """

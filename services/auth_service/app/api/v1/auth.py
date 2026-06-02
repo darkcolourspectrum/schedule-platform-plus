@@ -27,6 +27,7 @@ from app.schemas.auth import (
     VkRegisterRequest,
     VkRegisterCompleteRequest,
     VkRegisterResponse,
+    InternalVkLoginRequest,
 )
 from app.schemas.user import CurrentUser
 from app.models.user import User
@@ -565,3 +566,36 @@ async def get_auth_stats(
     
     stats = await auth_service.get_auth_stats()
     return stats
+
+@router.post(
+    "/internal/vk-login",
+    response_model=AuthResponse,
+    summary="Внутренний вход по vk_id (для бота)",
+    description=(
+        "Только для внутренних сервисов (X-Internal-API-Key). Принимает "
+        "доверенный vk_id (бот получает его из Long Poll сообщества) и "
+        "выдаёт токены платформы для существующего пользователя. "
+        "404, если аккаунта с таким vk_id нет."
+    ),
+)
+async def internal_vk_login(
+    payload: InternalVkLoginRequest,
+    request: Request,
+    client_info: dict = Depends(get_client_info),
+    internal_key_valid: bool = Depends(verify_internal_api_key),
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    result = await auth_service.vk_login(
+        vk_id=payload.vk_id,
+        device_info=client_info.get("device_info"),
+        ip_address=client_info.get("ip_address"),
+        user_agent=client_info.get("user_agent"),
+    )
+    return AuthResponse(
+        user=result["user"],
+        tokens={
+            "access_token": result["tokens"]["access_token"],
+            "refresh_token": result["tokens"]["refresh_token"],
+            "token_type": result["tokens"]["token_type"],
+        },
+    )

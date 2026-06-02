@@ -501,6 +501,60 @@ services:
     networks:
       - schedule_platform_network
 
+  # VK BOT SERVICE
+  vk-bot-service:
+    build:
+      context: .
+      dockerfile: services/vk_bot_service/Dockerfile
+    container_name: vk_bot_service
+    restart: unless-stopped
+    volumes:
+      - ./services/vk_bot_service/migrations:/app/migrations
+    environment:
+      APP_NAME: VK Bot Service
+      APP_VERSION: 1.0.0
+      DEBUG: ${DEBUG:-true}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      HOST: 0.0.0.0
+      PORT: 8006
+      DATABASE_URL: postgresql+asyncpg://vk_bot_user:vk_bot_password@postgres:5432/vk_bot_service_db
+      JWT_BLACKLIST_REDIS_URL: redis://redis:6379/15
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      AUTH_SERVICE_URL: http://auth-service:8000
+      CRM_SERVICE_URL: http://crm-service:8005
+      SCHEDULE_SERVICE_URL: http://schedule-service:8001
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://localhost
+      CORS_ALLOW_CREDENTIALS: "true"
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      VK_GROUP_TOKEN: ${VK_GROUP_TOKEN:-}
+      VK_GROUP_ID: ${VK_GROUP_ID:-0}
+    ports:
+      - "8006:8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Applying VK Bot Service migrations...' &&
+        alembic upgrade head &&
+        echo 'Migrations applied, starting VK Bot Service...' &&
+        python run_server.py
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - schedule_platform_network
+
   # ===== MANAGEMENT TOOLS =====
   pgadmin:
     image: dpage/pgadmin4:latest
