@@ -13,8 +13,19 @@ from app.database.connection import (
     AdminAsyncSessionLocal,
 )
 from app.database.redis_client import redis_client
-from app.api.v1 import studios, classrooms, users, user_management, dashboard
+from app.api.v1 import (
+    studios,
+    classrooms,
+    users,
+    user_management,
+    dashboard,
+    analytics,
+)
 from app.messaging.auth_consumer import consumer as auth_consumer
+from app.messaging.crm_analytics_consumer import consumer as crm_analytics_consumer
+from app.messaging.schedule_analytics_consumer import (
+    consumer as schedule_analytics_consumer,
+)
 from app.messaging.publisher_worker import init_worker
 
 
@@ -48,6 +59,24 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Failed to start auth event consumer: {exc}")
         raise
+
+    # Запуск аналитического consumer'а событий CRM Service.
+    # Слушает lead.* в exchange 'crm_events', наполняет аналитическую
+    # проекцию воронки (lead_facts, lead_status_transitions).
+    try:
+        await crm_analytics_consumer.start()
+    except Exception as exc:
+        logger.error(f"Failed to start CRM analytics consumer: {exc}")
+        raise
+
+    # Запуск аналитического consumer'а событий Schedule Service.
+    # Слушает lesson.* в exchange 'schedule_events', наполняет
+    # операционную проекцию расписания (lesson_facts).
+    try:
+        await schedule_analytics_consumer.start()
+    except Exception as exc:
+        logger.error(f"Failed to start Schedule analytics consumer: {exc}")
+        raise
     
     # Запуск outbox-publisher воркера для надёжной публикации событий
     # (studio.created, studio.updated, studio.deactivated, classroom.*)
@@ -70,6 +99,8 @@ async def lifespan(app: FastAPI):
     if outbox_worker is not None:
         await outbox_worker.stop()
     
+    await schedule_analytics_consumer.stop()
+    await crm_analytics_consumer.stop()
     await auth_consumer.stop()
     await redis_client.disconnect()
     await close_db_connections()
@@ -102,6 +133,7 @@ app.include_router(users.router, prefix="/api/v1")
 
 app.include_router(user_management.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
+app.include_router(analytics.router, prefix="/api/v1")
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
