@@ -18,8 +18,9 @@ COPY services/schedule_service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем код приложения
-COPY services/schedule_service/ .
 COPY shared/ /app/shared/
+COPY services/schedule_service/ .
+
 
 # Создаём директорию для логов
 RUN mkdir -p /app/logs

@@ -16,8 +16,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY services/admin_service/ .
 COPY shared/ /app/shared/
+COPY services/admin_service/ .
+
 
 # Create non-root user
 RUN adduser --disabled-password --gecos '' appuser && \

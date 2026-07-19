@@ -34,7 +34,6 @@ def main():
         reload=settings.debug,
         log_level="info" if settings.debug else "warning",
         access_log=True,
-        reload_dirs=["app"] if settings.debug else None,
     )
 
 

@@ -87,7 +87,7 @@ async def get_recurring_patterns(
     
     # Определяем фильтры на основе роли
     role = extract_role_name(current_user.get("role"))
-    user_id = current_user.get("id")
+    user_id = current_user.get("user_id")
     
     if role == "admin":
         # Админ может фильтровать как угодно

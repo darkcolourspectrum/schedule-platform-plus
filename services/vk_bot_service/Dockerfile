@@ -13,8 +13,9 @@ COPY services/vk_bot_service/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-COPY services/vk_bot_service/ .
 COPY shared/ /app/shared/
+COPY services/vk_bot_service/ .
+
 
 RUN adduser --disabled-password --gecos '' appuser && \
     chown -R appuser:appuser /app

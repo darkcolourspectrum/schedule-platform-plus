@@ -1,0 +1,64 @@
+# Dev-override: подхватывается docker compose автоматически.
+# Монтирует исходники в контейнеры - uvicorn reload видит изменения
+# без пересборки образа. Пересборка нужна только при изменении
+# requirements.txt или Dockerfile.
+# WATCHFILES_FORCE_POLLING нужен для корректной работы file watcher
+# через bind mount на Windows/WSL2.
+
+services:
+  api-gateway:
+    volumes:
+      - ./services/api_gateway/app:/app/app
+      - ./shared:/app/shared
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+
+  auth-service:
+    volumes:
+      - ./services/auth_service/app:/app/app
+      - ./shared:/app/shared
+      - ./services/auth_service/migrations:/app/migrations
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+
+  profile-service:
+    volumes:
+      - ./services/profile_service/app:/app/app
+      - ./shared:/app/shared
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+
+  schedule-service:
+    volumes:
+      - ./services/schedule_service/app:/app/app
+      - ./shared:/app/shared
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+
+  admin-service:
+    volumes:
+      - ./services/admin_service/app:/app/app
+      - ./shared:/app/shared
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+
+  notification-service:
+    volumes:
+      - ./services/notification_service/app:/app/app
+      - ./shared:/app/shared
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+
+  crm-service:
+    volumes:
+      - ./services/crm_service/app:/app/app
+      - ./shared:/app/shared
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+
+  vk-bot-service:
+    volumes:
+      - ./services/vk_bot_service/app:/app/app
+      - ./shared:/app/shared
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"

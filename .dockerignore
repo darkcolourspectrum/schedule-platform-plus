@@ -1,0 +1,33 @@
+# VCS и IDE
+.git
+.gitignore
+.vscode
+.idea
+
+# Python мусор
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/venv
+**/.venv
+
+# Секреты - не должны попадать в образы
+**/.env
+**/.env.*
+!**/.env.example
+
+# Не нужно внутри образов
+**/tests
+**/test_*.py
+**/debug_*.py
+**/*.md
+docs
+logs
+**/*.log
+
+# Docker-инфраструктура (монтируется через volumes, в образах не нужна)
+docker
+scripts
+docker-compose*.yml

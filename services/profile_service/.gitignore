@@ -82,10 +82,6 @@ pids
 ehthumbs.db
 Thumbs.db
 
-# Alembic
-migrations/versions/*.py
-!migrations/versions/__init__.py
-
 # Redis dump
 dump.rdb
 

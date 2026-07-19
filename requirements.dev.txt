@@ -1,0 +1,51 @@
+# Объединенные зависимости всех сервисов для dev-окружения (IDE, тесты).
+# Рантайм живет в докере со своими requirements.txt по сервисам.
+# Взяты максимальные версии из всех сервисов.
+
+# Web framework
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+
+# Database / ORM
+SQLAlchemy==2.0.50
+alembic==1.14.1
+asyncpg==0.31.0
+psycopg[binary]==3.2.13
+
+# Cache / messaging
+redis==5.0.1
+aio-pika==9.6.2
+
+# Validation / config
+pydantic==2.13.4
+pydantic-settings==2.14.1
+python-dotenv==1.0.1
+email-validator==2.3.0
+
+# Auth / security
+python-jose[cryptography]==3.4.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.3.0
+cryptography==44.0.2
+
+# HTTP clients
+httpx==0.28.1
+requests==2.32.3
+
+# Files / media
+python-multipart==0.0.20
+Pillow==10.4.0
+aiofiles==24.1.0
+
+# Dates / scheduling
+python-dateutil==2.9.0
+pytz==2024.2
+apscheduler==3.10.4
+
+# VK bot
+vkbottle==4.8.2
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0

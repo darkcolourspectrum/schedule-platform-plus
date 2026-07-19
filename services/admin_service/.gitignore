@@ -31,5 +31,3 @@ logs/
 *.db
 *.sqlite
 
-# Alembic
-# migrations/versions/*.py  # Uncomment if you want to ignore migration files

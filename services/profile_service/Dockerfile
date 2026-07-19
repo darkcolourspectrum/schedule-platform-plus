@@ -17,8 +17,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Копируем исходный код
-COPY services/profile_service/ .
 COPY shared/ /app/shared/
+COPY services/profile_service/ .
+
 
 # Создаем папки для статических файлов
 RUN mkdir -p /app/static/avatars

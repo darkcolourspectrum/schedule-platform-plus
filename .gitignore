@@ -44,7 +44,6 @@ env/
 
 # ===== DOCKER =====
 # Override файлы (для локальной разработки)
-docker-compose.override.yml
 docker-compose.local.yml
 
 # Docker volumes data
