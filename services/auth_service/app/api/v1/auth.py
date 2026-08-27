@@ -522,52 +522,6 @@ async def get_current_user_info(
 
 
 @router.post(
-    "/validate-token",
-    status_code=status.HTTP_200_OK,
-    summary="Валидация access токена",
-    description="Проверка валидности текущего access токена с Redis blacklist (для внутренних сервисов)"
-)
-async def validate_token(
-    current_user: User = Depends(get_current_user),
-    internal_key_valid: bool = Depends(verify_internal_api_key)
-):
-    """
-    Валидация access токена с использованием Redis кеша
-    
-    ИСПРАВЛЕНО: Теперь требует X-Internal-API-Key для защиты от внешних запросов
-    """
-    
-    return {
-        "valid": True,
-        "user_id": current_user.id,
-        "role": current_user.role.name,
-        "email": current_user.email,
-        "studio_id": current_user.studio_id
-    }
-
-
-@router.get(
-    "/stats",
-    summary="Статистика аутентификации",
-    description="Статистика rate limiting и blacklist кеша (только для администраторов)"
-)
-async def get_auth_stats(
-    current_user: User = Depends(get_current_user),
-    auth_service: AuthService = Depends(get_auth_service)
-):
-    """Получение статистики аутентификации"""
-    
-    # Проверяем права доступа
-    if not current_user.is_admin:
-        return JSONResponse(
-            status_code=status.HTTP_403_FORBIDDEN,
-            content={"detail": "Access denied. Admin role required"}
-        )
-    
-    stats = await auth_service.get_auth_stats()
-    return stats
-
-@router.post(
     "/internal/vk-login",
     response_model=AuthResponse,
     summary="Внутренний вход по vk_id (для бота)",

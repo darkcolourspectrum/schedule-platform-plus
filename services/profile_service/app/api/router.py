@@ -12,7 +12,3 @@ api_router = APIRouter(prefix="/api/v1")
 # Подключаем роутеры модулей
 api_router.include_router(profiles.router)
 api_router.include_router(avatars.router)
-
-
-# api_router.include_router(activities.router)
-# api_router.include_router(notifications.router)

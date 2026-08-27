@@ -257,44 +257,6 @@ class CacheService:
         key = f"profile_full:{user_id}"
         return await self.get(key)
     
-    async def cache_dashboard(
-        self, 
-        user_id: int, 
-        role: str, 
-        dashboard_data: Dict[str, Any]
-    ) -> bool:
-        """Кэширование данных дашборда"""
-        key = f"dashboard:{role}:{user_id}"
-        return await self.set(key, dashboard_data, settings.cache_dashboard_ttl)
-    
-    async def get_dashboard(
-        self, 
-        user_id: int, 
-        role: str
-    ) -> Optional[Dict[str, Any]]:
-        """Получение данных дашборда из кэша"""
-        key = f"dashboard:{role}:{user_id}"
-        return await self.get(key)
-    
-    async def cache_comments(
-        self, 
-        target_type: str, 
-        target_id: int, 
-        comments_data: List[Dict[str, Any]]
-    ) -> bool:
-        """Кэширование комментариев"""
-        key = f"comments:{target_type}:{target_id}"
-        return await self.set(key, comments_data, settings.cache_comments_ttl)
-    
-    async def get_comments(
-        self, 
-        target_type: str, 
-        target_id: int
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Получение комментариев из кэша"""
-        key = f"comments:{target_type}:{target_id}"
-        return await self.get(key)
-    
     async def invalidate_user_cache(self, user_id: int) -> int:
         """Полная очистка кэша пользователя"""
         patterns = [

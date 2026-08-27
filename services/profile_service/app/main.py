@@ -274,8 +274,6 @@ async def service_info():
         "debug": settings.debug,
         "features": {
             "profiles": True,
-            "comments": True,
-            "dashboard": True,
             "avatars": True,
             "cache": True,
             "auth_integration": True

@@ -6,9 +6,7 @@ starlette==0.45.3
 # База данных и ORM
 SQLAlchemy==2.0.38
 alembic==1.14.1
-psycopg2-binary==2.9.10
-psycopg
-psycopg-binary
+psycopg[binary]==3.2.13
 
 # Redis для кэширования
 redis==5.0.1
