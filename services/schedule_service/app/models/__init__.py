@@ -11,6 +11,7 @@ from app.models.processed_event import ProcessedEvent
 from app.models.event_outbox import EventOutbox
 from app.models.studio_cache import StudioCache
 from app.models.classroom_cache import ClassroomCache
+from app.models.recurring_pattern_slot import RecurringPatternSlot
 
 __all__ = [
     "Base",
@@ -23,5 +24,6 @@ __all__ = [
     "ProcessedEvent",
     "EventOutbox", 
     "StudioCache",
-    "ClassroomCache"
+    "ClassroomCache", 
+    "RecurringPatternSlot",
 ]

@@ -9,7 +9,6 @@ from datetime import date
 from app.models.lesson import Lesson
 from app.repositories.lesson_repository import LessonRepository
 from app.repositories.user_repository import UserRepository
-from app.services.lesson_generator_service import LessonGeneratorService
 from app.schemas.schedule import ScheduleLessonItem
 
 logger = logging.getLogger(__name__)
@@ -22,11 +21,9 @@ class ScheduleService:
         self,
         lesson_repo: LessonRepository,
         user_repo: UserRepository,
-        generator_service: LessonGeneratorService
     ):
         self.lesson_repo = lesson_repo
         self.user_repo = user_repo
-        self.generator_service = generator_service
     
     async def get_studio_schedule(
         self,
@@ -39,8 +36,6 @@ class ScheduleService:
         
         Автоматически догенерирует занятия если нужно
         """
-        # Проверяем и генерируем занятия если нужно
-        await self.generator_service.check_and_generate_if_needed(studio_id)
         
         # Получаем занятия
         lessons = await self.lesson_repo.get_by_studio(studio_id, from_date, to_date)

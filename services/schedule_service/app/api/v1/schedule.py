@@ -3,7 +3,7 @@ API endpoints для Schedule (расписание)
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from app.schemas.schedule import (
@@ -15,9 +15,12 @@ from app.schemas.schedule import (
     ConflictCheckRequest,
     ConflictCheckResponse
 )
+from app.services.recurring_pattern_service import RecurringPatternService
 from app.services.schedule_service import ScheduleService
 from app.services.lesson_generator_service import LessonGeneratorService
 from app.services.lesson_service import LessonService
+from app.services.conflict_service import ConflictService
+from app.domain.conflicts import LessonCandidate
 from app.dependencies import (
     get_current_user,
     get_current_admin,
@@ -26,10 +29,11 @@ from app.dependencies import (
     get_lesson_service,
     check_studio_access,
     check_teacher_access,
-    check_student_access
+    check_student_access,
+    get_pattern_service,
+     get_conflict_service,
 )
 from app.core.security import extract_role_name
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -159,110 +163,100 @@ async def get_student_schedule(
 @router.post(
     "/generate",
     response_model=GenerateLessonsResponse,
-    summary="Генерация занятий"
+    summary="Генерация занятий для шаблона"
 )
 async def generate_lessons(
     request: GenerateLessonsRequest,
     current_user: dict = Depends(get_current_admin),
-    generator_service: LessonGeneratorService = Depends(get_generator_service)
+    generator_service: LessonGeneratorService = Depends(get_generator_service),
+    pattern_service: RecurringPatternService = Depends(get_pattern_service),
 ):
     """
-    Ручная генерация занятий из шаблонов
-    
-    Доступно только админам
+    Ручная догенерация занятий для одного шаблона.
+
+    Идемпотентна: повторный вызов на тех же данных создаст ноль занятий,
+    потому что все целевые даты уже будут заняты.
+
+    Массовая генерация по всем шаблонам сюда не входит - её выполняет
+    фоновый воркер. Раньше она запускалась из этого эндпоинта и из GET
+    расписания студии, что и было источником дублей.
+
+    Доступно только админам.
     """
-    
-    until_date = request.until_date or (
-        date.today() + timedelta(weeks=settings.schedule_generation_weeks)
+    if not request.pattern_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Укажите pattern_id. Массовая генерация выполняется "
+                "фоновым воркером, а не этим эндпоинтом"
+            ),
+        )
+
+    pattern = await pattern_service.get_pattern(request.pattern_id)
+
+    result = await generator_service.generate_pattern(
+        pattern=pattern,
+        slots=list(pattern.slots),
+        student_ids=await pattern_service.get_pattern_student_ids(pattern.id),
+        until_date=request.until_date,
     )
-    
-    if request.pattern_id:
-        # Генерация для конкретного шаблона
-        from app.dependencies import get_pattern_service
-        from app.repositories.recurring_pattern_repository import RecurringPatternRepository
-        from app.database.connection import get_schedule_db
-        
-        # Это упрощенный вариант, в production лучше через dependency
-        async for db in get_schedule_db():
-            pattern_repo = RecurringPatternRepository(db)
-            pattern = await pattern_repo.get_by_id(request.pattern_id)
-            
-            if not pattern:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Pattern {request.pattern_id} not found"
-                )
-            
-            generated, skipped, errors = await generator_service.generate_lessons_for_pattern(
-                pattern,
-                until_date
-            )
-            break
-    else:
-        # Генерация для всех шаблонов
-        generated, skipped, errors = await generator_service.generate_all_patterns(until_date)
-    
+
     return GenerateLessonsResponse(
         success=True,
-        generated_count=generated,
-        skipped_count=skipped,
-        errors=errors,
-        message=f"Generated {generated} lessons, skipped {skipped}"
+        generated_count=result.created_count,
+        skipped_count=result.blocked_count + result.already_existed_count,
+        errors=[],
+        message=(
+            f"Создано {result.created_count}, "
+            f"уже существовало {result.already_existed_count}, "
+            f"заблокировано конфликтами {result.blocked_count}"
+        ),
     )
 
 
 @router.post(
     "/check-conflict",
     response_model=ConflictCheckResponse,
-    summary="Проверка конфликта кабинета"
+    summary="Проверка конфликтов перед созданием занятия"
 )
 async def check_classroom_conflict(
     request: ConflictCheckRequest,
     current_user: dict = Depends(get_current_user),
-    lesson_service: LessonService = Depends(get_lesson_service)
+    conflict_service: ConflictService = Depends(get_conflict_service),
 ):
     """
-    Проверить конфликт кабинета на определенную дату и время
-    
-    Полезно для валидации перед созданием занятия
+    Проверить, свободно ли время.
+
+    Проверяются три ресурса, а не один: кабинет, преподаватель и ученики.
+    Раньше проверялся только кабинет, поэтому преподавателя можно было
+    поставить в два места одновременно.
+
+    Ответ носит справочный характер. Настоящая защита стоит в базе -
+    два EXCLUDE-констрейнта на lessons, которые не обойти даже двум
+    одновременным запросам.
     """
-    
-    has_conflict = await lesson_service.check_classroom_conflict(
-        classroom_id=request.classroom_id,
+    candidate = LessonCandidate(
         lesson_date=request.lesson_date,
         start_time=request.start_time,
         end_time=request.end_time,
-        exclude_lesson_id=request.exclude_lesson_id
+        teacher_id=current_user.get("user_id"),
+        classroom_id=request.classroom_id,
     )
-    
-    conflicting_lessons = []
-    
-    if has_conflict:
-        # Получаем конфликтующие занятия для деталей
-        from app.repositories.lesson_repository import LessonRepository
-        from app.database.connection import get_schedule_db
-        
-        async for db in get_schedule_db():
-            lesson_repo = LessonRepository(db)
-            lessons = await lesson_repo.get_by_classroom(
-                request.classroom_id,
-                request.lesson_date,
-                request.exclude_lesson_id
-            )
-            
-            for lesson in lessons:
-                # Проверяем пересечение
-                if (request.start_time < lesson.end_time and 
-                    request.end_time > lesson.start_time):
-                    conflicting_lessons.append({
-                        "lesson_id": lesson.id,
-                        "start_time": str(lesson.start_time),
-                        "end_time": str(lesson.end_time),
-                        "teacher_id": lesson.teacher_id
-                    })
-            break
-    
+
+    report = await conflict_service.check_single(
+        candidate, exclude_lesson_id=request.exclude_lesson_id
+    )
+
     return ConflictCheckResponse(
-        has_conflict=has_conflict,
-        conflicting_lessons=conflicting_lessons
+        has_conflict=report.has_conflicts,
+        conflicting_lessons=[
+            {
+                "lesson_id": c.existing_lesson_id,
+                "kind": c.kind.value,
+                "start_time": str(c.other_start),
+                "end_time": str(c.other_end),
+                "subject_id": c.subject_id,
+            }
+            for c in report.conflicts
+        ],
     )

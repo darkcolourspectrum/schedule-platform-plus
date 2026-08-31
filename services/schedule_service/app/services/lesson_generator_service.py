@@ -1,211 +1,437 @@
 """
-Сервис генерации занятий из recurring patterns
+Генерация занятий из шаблонов.
+
+Файл переписан целиком. От прежней версии не осталось ничего, кроме
+имени класса, потому что менялся сам принцип работы.
+
+Было: курсор. Генератор находил последнее занятие шаблона и прибавлял
+к его дате неделю. Из этого следовало всё сразу - дубли при разрыве
+истории, игнорирование смены дня недели, безвозвратная потеря даты при
+конфликте, зависимость результата от порядка вызовов.
+
+Стало: сверка множеств. Генератор считает полное множество дат, на
+которые должен попасть слот, вычитает уже существующие и создаёт разницу.
+Результат зависит только от состояния данных, а не от истории вызовов.
+Повторный запуск ничего не меняет.
+
+Три операции:
+    preview_pattern    посчитать, что получится, ничего не записывая
+    generate_pattern   создать недостающее
+    rollback_batch     отменить один прогон
+
+Предпросмотр и генерация строят план одним и тем же кодом, поэтому
+показанное пользователю число совпадает с тем, что будет создано.
 """
 
 import logging
-from typing import List, Optional, Tuple
-from datetime import date, time, timedelta, datetime
-import pytz
+from dataclasses import dataclass, field
+from datetime import date, time
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Iterable
+from uuid import UUID, uuid4
 
+from app.domain.conflicts import (
+    Conflict,
+    ConflictReport,
+    LessonCandidate,
+)
+from app.domain.recurrence import (
+    calculate_end_time,
+    generation_horizon_end,
+    slot_occurrence_dates,
+    today_in_studio_tz,
+)
 from app.models.recurring_pattern import RecurringPattern
-from app.models.lesson import Lesson
-from app.repositories.recurring_pattern_repository import RecurringPatternRepository
-from app.repositories.lesson_repository import LessonRepository
-from app.config import settings
-from app.core.exceptions import GenerationException
+from app.models.recurring_pattern_slot import RecurringPatternSlot
+from app.repositories.lesson_generation_repository import (
+    LessonGenerationRepository,
+)
+from app.services.conflict_service import ConflictService
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class PlannedLesson:
+    """Занятие, которое генератор собирается создать."""
+
+    slot_id: Optional[int]
+    lesson_date: date
+    start_time: time
+    end_time: time
+    teacher_id: int
+    studio_id: int
+    classroom_id: Optional[int]
+
+
+@dataclass(frozen=True)
+class BlockedLesson:
+    """Занятие, которое создать нельзя, и причина."""
+
+    slot_id: int
+    lesson_date: date
+    start_time: time
+    end_time: time
+    classroom_id: Optional[int]
+    conflicts: Tuple[Conflict, ...]
+
+
+@dataclass
+class GenerationPlan:
+    """
+    Что произойдёт при генерации. Ничего не записано.
+
+    Отдаётся предпросмотру как есть и используется генератором как
+    инструкция. Одна структура на два сценария - гарантия того, что
+    показанное число совпадёт с созданным.
+    """
+
+    to_create: List[PlannedLesson] = field(default_factory=list)
+    blocked: List[BlockedLesson] = field(default_factory=list)
+    already_exists_count: int = 0
+    horizon_end: Optional[date] = None
+    student_ids: Tuple[int, ...] = ()
+
+    @property
+    def will_create_count(self) -> int:
+        return len(self.to_create)
+
+    @property
+    def blocked_count(self) -> int:
+        return len(self.blocked)
+
+
+@dataclass
+class GenerationResult:
+    """Итог фактической генерации."""
+
+    batch_id: Optional[UUID]
+    created_count: int
+    blocked_count: int
+    already_existed_count: int
+    blocked: List[BlockedLesson] = field(default_factory=list)
+    horizon_end: Optional[date] = None
+
+
 class LessonGeneratorService:
-    """Сервис для генерации занятий из шаблонов"""
-    
+    """Создание занятий из шаблонов повторения."""
+
     def __init__(
         self,
-        pattern_repo: RecurringPatternRepository,
-        lesson_repo: LessonRepository
+        generation_repo: LessonGenerationRepository,
+        conflict_service: ConflictService,
     ):
-        self.pattern_repo = pattern_repo
-        self.lesson_repo = lesson_repo
-        self.timezone = pytz.timezone(settings.schedule_timezone)
-    
-    async def generate_lessons_for_pattern(
+        self.generation_repo = generation_repo
+        self.conflict_service = conflict_service
+
+    # ==================== ПЛАНИРОВАНИЕ ====================
+
+    async def build_plan(
         self,
         pattern: RecurringPattern,
-        until_date: date
-    ) -> Tuple[int, int, List[str]]:
+        slots: Sequence[RecurringPatternSlot],
+        student_ids: Sequence[int],
+        until_date: Optional[date] = None,
+        exclude_lesson_ids: Optional[Iterable[int]] = None,
+    ) -> GenerationPlan:
         """
-        Генерация занятий для конкретного шаблона
-        
+        Посчитать, какие занятия нужно создать. В БД ничего не пишется.
+
+        Шаги:
+            1. Для каждого слота посчитать целевые даты в горизонте.
+            2. Вычесть даты, на которых занятие уже есть.
+            3. Проверить остаток на конфликты по трём ресурсам.
+            4. Разделить на "создаём" и "заблокировано".
+
         Args:
-            pattern: Шаблон повторения
-            until_date: До какой даты генерировать
-            
-        Returns:
-            Tuple[generated_count, skipped_count, errors]
+            pattern: шаблон с заполненными valid_from / valid_until /
+                anchor_date / week_interval.
+            slots: слоты шаблона. Для предпросмотра ещё не сохранённого
+                шаблона сюда передаются несохранённые объекты с id=None.
+            student_ids: ученики шаблона.
+            until_date: до какой даты считать. По умолчанию - горизонт
+                из настроек.
         """
-        generated_count = 0
-        skipped_count = 0
-        errors = []
-        
-        try:
-            # Находим последнее сгенерированное занятие
-            last_lesson = await self.lesson_repo.get_last_generated_lesson(pattern.id)
-            
-            if last_lesson:
-                # Начинаем со следующей недели после последнего занятия
-                next_date = last_lesson.lesson_date + timedelta(days=7)
-            else:
-                # Первая генерация - начинаем с valid_from
-                next_date = pattern.valid_from
-                # Находим ближайший нужный день недели
-                while next_date.isoweekday() != pattern.day_of_week:
-                    next_date += timedelta(days=1)
-            
-            # Генерируем занятия
-            while next_date <= until_date:
-                # Проверяем, не вышли ли за пределы valid_until
-                if pattern.valid_until and next_date > pattern.valid_until:
-                    break
-                
-                # Вычисляем end_time
-                end_time = self._calculate_end_time(
-                    pattern.start_time,
-                    pattern.duration_minutes
-                )
-                
-                # Проверяем конфликт кабинета
-                if pattern.classroom_id:
-                    has_conflict = await self.lesson_repo.check_classroom_conflict(
-                        classroom_id=pattern.classroom_id,
-                        lesson_date=next_date,
-                        start_time=pattern.start_time,
-                        end_time=end_time
-                    )
-                    
-                    if has_conflict:
-                        error_msg = f"Conflict for {next_date} at {pattern.start_time} in classroom {pattern.classroom_id}"
-                        logger.warning(error_msg)
-                        errors.append(error_msg)
-                        skipped_count += 1
-                        next_date += timedelta(days=7)
-                        continue
-                
-                # Создаем занятие
-                lesson = Lesson(
-                    studio_id=pattern.studio_id,
-                    teacher_id=pattern.teacher_id,
-                    classroom_id=pattern.classroom_id,
-                    recurring_pattern_id=pattern.id,
-                    lesson_date=next_date,
-                    start_time=pattern.start_time,
-                    end_time=end_time,
-                    status="scheduled"
-                )
-                
-                await self.lesson_repo.create(lesson)
-                
-                # Копируем учеников из шаблона
-                student_ids = await self.pattern_repo.get_student_ids(pattern.id)
-                for student_id in student_ids:
-                    await self.lesson_repo.add_student(lesson.id, student_id)
-                
-                generated_count += 1
-                logger.info(f"Generated lesson for pattern {pattern.id} on {next_date}")
-                
-                # Переходим к следующей неделе
-                next_date += timedelta(days=7)
-            
-            return generated_count, skipped_count, errors
-            
-        except Exception as e:
-            logger.error(f"Error generating lessons for pattern {pattern.id}: {e}")
-            raise GenerationException(
-                message=f"Failed to generate lessons for pattern {pattern.id}",
-                details=str(e)
+        horizon_end = until_date or generation_horizon_end()
+
+        if not pattern.is_active:
+            logger.info(
+                "Pattern %s is inactive, nothing to generate", pattern.id
             )
-    
-    async def generate_all_patterns(
-        self,
-        until_date: Optional[date] = None
-    ) -> Tuple[int, int, List[str]]:
-        """
-        Генерация занятий для всех активных шаблонов
+            return GenerationPlan(
+                horizon_end=horizon_end,
+                student_ids=tuple(student_ids),
+            )
+
+        # Шаг 1: целевые даты по каждому слоту.
+        # Ключуем список парами, а не словарём по slot.id: при предпросмотре
+        # несохранённого шаблона id у всех слотов None, и словарь схлопнул бы
+        # их в одну запись.
         
-        Args:
-            until_date: До какой даты генерировать (по умолчанию +2 недели)
-            
-        Returns:
-            Tuple[total_generated, total_skipped, errors]
-        """
-        if not until_date:
-            until_date = date.today() + timedelta(weeks=settings.schedule_generation_weeks)
-        
-        total_generated = 0
-        total_skipped = 0
-        all_errors = []
-        
-        # Получаем все активные шаблоны
-        patterns = await self.pattern_repo.get_active_patterns()
-        
-        logger.info(f"Generating lessons for {len(patterns)} patterns until {until_date}")
-        
-        for pattern in patterns:
-            try:
-                generated, skipped, errors = await self.generate_lessons_for_pattern(
-                    pattern,
-                    until_date
+        dates_per_slot: List[Tuple[RecurringPatternSlot, List[date]]] = []
+
+        # Занятия не создаются задним числом. valid_from у давнего шаблона
+        # может лежать в прошлом, и без этой границы генератор попытался бы
+        # заполнить всю историю от даты начала действия.
+        effective_from = max(pattern.valid_from, today_in_studio_tz())
+        for slot in slots:
+            dates_per_slot.append(
+                (
+                    slot,
+                    slot_occurrence_dates(
+                        day_of_week=slot.day_of_week,
+                        valid_from=effective_from,
+                        valid_until=pattern.valid_until,
+                        anchor_date=pattern.anchor_date,
+                        week_interval=pattern.week_interval,
+                        horizon_end=horizon_end,
+                    ),
                 )
-                total_generated += generated
-                total_skipped += skipped
-                all_errors.extend(errors)
-                
-            except Exception as e:
-                error_msg = f"Failed to generate for pattern {pattern.id}: {str(e)}"
-                logger.error(error_msg)
-                all_errors.append(error_msg)
-        
-        logger.info(
-            f"Generation complete: {total_generated} generated, "
-            f"{total_skipped} skipped, {len(all_errors)} errors"
+            )
+
+        all_dates = [d for _slot, dates in dates_per_slot for d in dates]
+
+        if not all_dates:
+            return GenerationPlan(
+                horizon_end=horizon_end,
+                student_ids=tuple(student_ids),
+            )
+
+        # Шаг 2: что уже есть в БД. Диапазон сужаем до реальных дат,
+        # а не до valid_from - у давнего шаблона это тысячи лишних строк.
+        existing_by_slot = await self._fetch_existing(
+            [slot for slot, _dates in dates_per_slot],
+            min(all_dates),
+            max(all_dates),
         )
-        
-        return total_generated, total_skipped, all_errors
-    
-    async def check_and_generate_if_needed(self, studio_id: int) -> Tuple[int, int]:
-        """
-        Проверить нужно ли генерировать занятия для студии и сгенерировать
-        
-        Вызывается при запросе расписания как fallback механизм
-        
-        Returns:
-            Tuple[generated_count, skipped_count]
-        """
-        target_date = date.today() + timedelta(weeks=settings.schedule_generation_weeks)
-        
-        # Получаем активные шаблоны студии
-        patterns = await self.pattern_repo.get_by_studio(studio_id, active_only=True)
-        
-        total_generated = 0
-        total_skipped = 0
-        
-        for pattern in patterns:
-            # Проверяем последнее сгенерированное занятие
-            last_lesson = await self.lesson_repo.get_last_generated_lesson(pattern.id)
-            
-            if not last_lesson or last_lesson.lesson_date < target_date:
-                # Нужна генерация
-                generated, skipped, _ = await self.generate_lessons_for_pattern(
-                    pattern,
-                    target_date
+
+        # Шаг 3: кандидаты из разницы множеств.
+        candidates: List[LessonCandidate] = []
+        planned: List[PlannedLesson] = []
+        already_exists = 0
+
+        for slot, target_dates in dates_per_slot:
+            occupied = (
+                existing_by_slot.get(slot.id, set()) if slot.id is not None else set()
+            )
+            end_time = calculate_end_time(slot.start_time, slot.duration_minutes)
+
+            for lesson_date in target_dates:
+                if lesson_date in occupied:
+                    already_exists += 1
+                    continue
+
+                planned.append(
+                    PlannedLesson(
+                        slot_id=slot.id,
+                        lesson_date=lesson_date,
+                        start_time=slot.start_time,
+                        end_time=end_time,
+                        teacher_id=pattern.teacher_id,
+                        studio_id=pattern.studio_id,
+                        classroom_id=slot.classroom_id,
+                    )
                 )
-                total_generated += generated
-                total_skipped += skipped
-        
-        return total_generated, total_skipped
-    
-    def _calculate_end_time(self, start_time: time, duration_minutes: int) -> time:
-        """Вычислить время окончания занятия"""
-        start_datetime = datetime.combine(date.today(), start_time)
-        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
-        return end_datetime.time()
+                candidates.append(
+                    LessonCandidate(
+                        lesson_date=lesson_date,
+                        start_time=slot.start_time,
+                        end_time=end_time,
+                        teacher_id=pattern.teacher_id,
+                        classroom_id=slot.classroom_id,
+                        student_ids=tuple(student_ids),
+                        ref=str(slot.id),
+                    )
+                )
+
+        if not candidates:
+            return GenerationPlan(
+                already_exists_count=already_exists,
+                horizon_end=horizon_end,
+                student_ids=tuple(student_ids),
+            )
+
+        # Шаг 4: конфликты.
+        report = await self.conflict_service.check_candidates(
+            candidates, exclude_lesson_ids=exclude_lesson_ids
+        )
+
+        return self._split_by_conflicts(
+            planned=planned,
+            report=report,
+            already_exists=already_exists,
+            horizon_end=horizon_end,
+            student_ids=tuple(student_ids),
+        )
+
+    def _split_by_conflicts(
+        self,
+        *,
+        planned: List[PlannedLesson],
+        report: ConflictReport,
+        already_exists: int,
+        horizon_end: date,
+        student_ids: Tuple[int, ...],
+    ) -> GenerationPlan:
+        """Разложить запланированное на создаваемое и заблокированное."""
+        conflicts_by_index = report.by_candidate()
+        blocked_indices = report.conflicting_indices
+
+        to_create = [
+            planned[i] for i in range(len(planned)) if i not in blocked_indices
+        ]
+
+        blocked = [
+            BlockedLesson(
+                slot_id=planned[i].slot_id,
+                lesson_date=planned[i].lesson_date,
+                start_time=planned[i].start_time,
+                end_time=planned[i].end_time,
+                classroom_id=planned[i].classroom_id,
+                conflicts=tuple(conflicts_by_index.get(i, [])),
+            )
+            for i in sorted(blocked_indices)
+        ]
+
+        return GenerationPlan(
+            to_create=to_create,
+            blocked=blocked,
+            already_exists_count=already_exists,
+            horizon_end=horizon_end,
+            student_ids=student_ids,
+        )
+
+    async def _fetch_existing(
+        self,
+        slots: Sequence[RecurringPatternSlot],
+        from_date: date,
+        to_date: date,
+    ) -> Dict[int, Set[date]]:
+        """
+        Занятые даты по слотам.
+
+        Слоты без id (предпросмотр несохранённого шаблона) пропускаются:
+        занятий у них быть не может по определению.
+        """
+        saved_slot_ids = [slot.id for slot in slots if slot.id is not None]
+
+        if not saved_slot_ids:
+            return {}
+
+        return await self.generation_repo.get_existing_dates_for_slots(
+            saved_slot_ids, from_date, to_date
+        )
+
+    # ==================== ГЕНЕРАЦИЯ ====================
+
+    async def generate_pattern(
+        self,
+        pattern: RecurringPattern,
+        slots: Sequence[RecurringPatternSlot],
+        student_ids: Sequence[int],
+        until_date: Optional[date] = None,
+    ) -> GenerationResult:
+        """
+        Создать недостающие занятия шаблона.
+
+        Идемпотентна: повторный вызов на тех же данных создаст ноль
+        занятий, потому что все целевые даты уже будут заняты.
+
+        Не коммитит. Транзакцией управляет вызывающий слой -
+        сервис или зависимость FastAPI, в соответствии с Unit of Work.
+        """
+        plan = await self.build_plan(pattern, slots, student_ids, until_date)
+
+        if not plan.to_create:
+            logger.info(
+                "Pattern %s: nothing to generate (exists=%s, blocked=%s)",
+                pattern.id,
+                plan.already_exists_count,
+                plan.blocked_count,
+            )
+            return GenerationResult(
+                batch_id=None,
+                created_count=0,
+                blocked_count=plan.blocked_count,
+                already_existed_count=plan.already_exists_count,
+                blocked=plan.blocked,
+                horizon_end=plan.horizon_end,
+            )
+
+        batch_id = uuid4()
+
+        rows = [
+            {
+                "studio_id": item.studio_id,
+                "teacher_id": item.teacher_id,
+                "classroom_id": item.classroom_id,
+                "recurring_pattern_id": pattern.id,
+                "recurring_pattern_slot_id": item.slot_id,
+                "lesson_date": item.lesson_date,
+                "start_time": item.start_time,
+                "end_time": item.end_time,
+                "status": "scheduled",
+                "is_manually_modified": False,
+                "generation_batch_id": batch_id,
+            }
+            for item in plan.to_create
+        ]
+
+        inserted = await self.generation_repo.insert_lessons(rows)
+
+        if student_ids and inserted:
+            pairs = [
+                (lesson_id, student_id)
+                for lesson_id, _slot_id, _lesson_date in inserted
+                for student_id in student_ids
+            ]
+            await self.generation_repo.insert_lesson_students(pairs)
+
+        # Расхождение между планом и фактом означает гонку: кто-то занял
+        # слот между проверкой конфликтов и вставкой. База это отбила,
+        # данные целы, но факт стоит зафиксировать в логах.
+        if len(inserted) != len(rows):
+            logger.warning(
+                "Pattern %s: planned %s lessons, inserted %s. "
+                "Разницу отбила база (параллельная запись)",
+                pattern.id,
+                len(rows),
+                len(inserted),
+            )
+
+        logger.info(
+            "Pattern %s: generated %s lessons, batch %s "
+            "(existed=%s, blocked=%s, horizon=%s)",
+            pattern.id,
+            len(inserted),
+            batch_id,
+            plan.already_exists_count,
+            plan.blocked_count,
+            plan.horizon_end,
+        )
+
+        return GenerationResult(
+            batch_id=batch_id,
+            created_count=len(inserted),
+            blocked_count=plan.blocked_count,
+            already_existed_count=plan.already_exists_count,
+            blocked=plan.blocked,
+            horizon_end=plan.horizon_end,
+        )
+
+    # ==================== ОТКАТ ====================
+
+    async def rollback_batch(self, batch_id: UUID) -> int:
+        """
+        Отменить прогон генерации.
+
+        Удаляет только будущие занятия этого прогона, не тронутые вручную
+        и не проведённые. Ошибка в настройке шаблона перестаёт быть
+        необратимой: одно действие возвращает расписание к прежнему виду.
+
+        Returns:
+            Количество удалённых занятий.
+        """
+        return await self.generation_repo.delete_generation_batch(
+            batch_id=batch_id,
+            not_before=today_in_studio_tz(),
+        )

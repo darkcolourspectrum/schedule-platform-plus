@@ -64,10 +64,29 @@ class Settings(BaseSettings):
     
     # ===== SCHEDULE SETTINGS =====
     schedule_generation_weeks: int = Field(2, env="SCHEDULE_GENERATION_WEEKS")
+    schedule_working_days: str = Field("1,2,3,4,5,6", env="SCHEDULE_WORKING_DAYS")
+    schedule_generation_interval_minutes: int = Field(60, env="SCHEDULE_GENERATION_INTERVAL_MINUTES")
+    schedule_generation_initial_delay_seconds: float = Field(15.0, env="SCHEDULE_GENERATION_INITIAL_DELAY_SECONDS")
+    schedule_generation_enabled: bool = Field(True, env="SCHEDULE_GENERATION_ENABLED")
     default_lesson_duration_minutes: int = Field(60, env="DEFAULT_LESSON_DURATION_MINUTES")
     schedule_timezone: str = Field("Asia/Tomsk", env="SCHEDULE_TIMEZONE")
     working_hours_start: str = Field("09:00", env="WORKING_HOURS_START")
     working_hours_end: str = Field("20:00", env="WORKING_HOURS_END")
+
+    @property
+    def working_days_set(self) -> set:
+        """
+        Рабочие дни студии как множество чисел 1-7 (ISO).
+
+        Воскресенье по умолчанию исключено. Если студия начнёт работать
+        в воскресенье, меняется одна переменная окружения здесь и одна
+        константа WORKING_DAYS на фронте.
+        """
+        return {
+            int(day.strip())
+            for day in self.schedule_working_days.split(",")
+            if day.strip()
+        }
     
     @property
     def cors_origins_list(self) -> List[str]:

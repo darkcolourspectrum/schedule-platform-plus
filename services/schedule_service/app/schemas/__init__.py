@@ -4,15 +4,24 @@ from app.schemas.recurring_pattern import (
     RecurringPatternCreate,
     RecurringPatternUpdate,
     RecurringPatternResponse,
-    RecurringPatternListResponse
+    RecurringPatternListResponse,
+    RecurringPatternSlotCreate,
+    RecurringPatternSlotResponse,
+    RecurringPatternPreviewRequest,
+    RecurringPatternPreviewResponse,
+    RecurringPatternWithGeneration,
+    PatternGenerationSummary,
+    PreviewConflictItem,
 )
+
 from app.schemas.lesson import (
     LessonCreate,
     LessonUpdate,
     LessonResponse,
     LessonListResponse,
     LessonWithDetails,
-    LessonStudentInfo
+    LessonStudentInfo,
+    LessonCompleteRequest,
 )
 from app.schemas.schedule import (
     ScheduleFilters,
@@ -42,6 +51,13 @@ __all__ = [
     "RecurringPatternUpdate",
     "RecurringPatternResponse",
     "RecurringPatternListResponse",
+    "RecurringPatternSlotCreate",
+    "RecurringPatternSlotResponse",
+    "RecurringPatternPreviewRequest",
+    "RecurringPatternPreviewResponse",
+    "RecurringPatternWithGeneration",
+    "PatternGenerationSummary",
+    "PreviewConflictItem",
     "LessonCreate",
     "LessonUpdate",
     "LessonResponse",
@@ -66,4 +82,5 @@ __all__ = [
     "UserInfo",
     "StudioInfo",
     "ClassroomInfo",
+    "LessonCompleteRequest",
 ]

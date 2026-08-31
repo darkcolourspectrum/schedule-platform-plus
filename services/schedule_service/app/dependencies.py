@@ -11,6 +11,9 @@ from app.database.connection import get_schedule_db
 from app.repositories.recurring_pattern_repository import RecurringPatternRepository
 from app.repositories.lesson_repository import LessonRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.conflict_repository import ConflictRepository
+from app.repositories.lesson_generation_repository import LessonGenerationRepository
+from app.services.conflict_service import ConflictService
 from app.services.lesson_generator_service import LessonGeneratorService
 from app.services.recurring_pattern_service import RecurringPatternService
 from app.services.lesson_service import LessonService
@@ -54,38 +57,59 @@ async def get_user_repository(
 
 # ========== SERVICE DEPENDENCIES ==========
 
+async def get_conflict_repository(
+    db: AsyncSession = Depends(get_db)
+) -> ConflictRepository:
+    """Get ConflictRepository"""
+    return ConflictRepository(db)
+
+
+async def get_generation_repository(
+    db: AsyncSession = Depends(get_db)
+) -> LessonGenerationRepository:
+    """Get LessonGenerationRepository"""
+    return LessonGenerationRepository(db)
+
+
+async def get_conflict_service(
+    conflict_repo: ConflictRepository = Depends(get_conflict_repository)
+) -> ConflictService:
+    """Get ConflictService"""
+    return ConflictService(conflict_repo)
+
+
 async def get_generator_service(
-    pattern_repo: RecurringPatternRepository = Depends(get_pattern_repository),
-    lesson_repo: LessonRepository = Depends(get_lesson_repository)
+    generation_repo: LessonGenerationRepository = Depends(get_generation_repository),
+    conflict_service: ConflictService = Depends(get_conflict_service),
 ) -> LessonGeneratorService:
     """Get LessonGeneratorService"""
-    return LessonGeneratorService(pattern_repo, lesson_repo)
+    return LessonGeneratorService(generation_repo, conflict_service)
 
 
 async def get_pattern_service(
     pattern_repo: RecurringPatternRepository = Depends(get_pattern_repository),
-    lesson_repo: LessonRepository = Depends(get_lesson_repository),
-    generator_service: LessonGeneratorService = Depends(get_generator_service)
+    generation_repo: LessonGenerationRepository = Depends(get_generation_repository),
+    generator_service: LessonGeneratorService = Depends(get_generator_service),
 ) -> RecurringPatternService:
     """Get RecurringPatternService"""
-    return RecurringPatternService(pattern_repo, lesson_repo, generator_service)
+    return RecurringPatternService(pattern_repo, generation_repo, generator_service)
 
 
 async def get_lesson_service(
     lesson_repo: LessonRepository = Depends(get_lesson_repository),
+    conflict_service: ConflictService = Depends(get_conflict_service),
     db: AsyncSession = Depends(get_db),
 ) -> LessonService:
     """Get LessonService"""
-    return LessonService(lesson_repo, db)
+    return LessonService(lesson_repo, conflict_service, db)
 
 
 async def get_schedule_service(
     lesson_repo: LessonRepository = Depends(get_lesson_repository),
     user_repo: UserRepository = Depends(get_user_repository),
-    generator_service: LessonGeneratorService = Depends(get_generator_service)
 ) -> ScheduleService:
     """Get ScheduleService"""
-    return ScheduleService(lesson_repo, user_repo, generator_service)
+    return ScheduleService(lesson_repo, user_repo)
 
 
 # ========== AUTH DEPENDENCIES ==========

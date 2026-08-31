@@ -5,6 +5,8 @@ from app.services.recurring_pattern_service import RecurringPatternService
 from app.services.lesson_service import LessonService
 from app.services.schedule_service import ScheduleService
 from app.services.admin_service_client import admin_service_client
+from app.services.conflict_service import ConflictService
+from app.services.generation_worker import ScheduleGenerationWorker
 
 __all__ = [
     "LessonGeneratorService",
@@ -12,4 +14,6 @@ __all__ = [
     "LessonService",
     "ScheduleService",
     "admin_service_client",
+    "ConflictService",
+    "ScheduleGenerationWorker",
 ]

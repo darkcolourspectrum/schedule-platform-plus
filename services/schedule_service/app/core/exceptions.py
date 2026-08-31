@@ -30,11 +30,67 @@ class LessonNotFoundException(ScheduleServiceException):
 
 
 class ClassroomConflictException(ScheduleServiceException):
-    """Конфликт кабинета"""
-    def __init__(self, classroom_id: int, lesson_date: str, time: str):
+    """Кабинет занят в это время"""
+    def __init__(
+        self,
+        classroom_id: Optional[int] = None,
+        lesson_date: Optional[str] = None,
+        time: Optional[str] = None,
+    ):
+        if classroom_id and lesson_date and time:
+            message = (
+                f"Кабинет уже занят: {lesson_date} в {time}"
+            )
+        else:
+            message = "Кабинет уже занят в это время"
         super().__init__(
-            message=f"Classroom {classroom_id} is already booked on {lesson_date} at {time}",
-            details="Another lesson is scheduled in this classroom at the same time"
+            message=message,
+            details="В этом кабинете уже есть занятие в пересекающееся время",
+        )
+
+
+class TeacherConflictException(ScheduleServiceException):
+    """Преподаватель занят в это время"""
+    def __init__(
+        self,
+        teacher_id: Optional[int] = None,
+        lesson_date: Optional[str] = None,
+        time: Optional[str] = None,
+    ):
+        if lesson_date and time:
+            message = f"Преподаватель уже занят: {lesson_date} в {time}"
+        else:
+            message = "Преподаватель уже занят в это время"
+        super().__init__(
+            message=message,
+            details="У преподавателя есть другое занятие в пересекающееся время",
+        )
+
+
+class StudentConflictException(ScheduleServiceException):
+    """Ученик занят в это время"""
+    def __init__(
+        self,
+        student_id: Optional[int] = None,
+        lesson_date: Optional[str] = None,
+        time: Optional[str] = None,
+    ):
+        if lesson_date and time:
+            message = f"Ученик уже занят: {lesson_date} в {time}"
+        else:
+            message = "Ученик уже занят в это время"
+        super().__init__(
+            message=message,
+            details="У ученика есть другое занятие в пересекающееся время",
+        )
+
+
+class DuplicateLessonException(ScheduleServiceException):
+    """Такая запись уже существует"""
+    def __init__(self, message: Optional[str] = None):
+        super().__init__(
+            message=message or "Занятие на эту дату уже создано",
+            details="Повторное создание отклонено ограничением базы данных",
         )
 
 
@@ -86,3 +142,12 @@ class GenerationException(ScheduleServiceException):
     """Ошибка генерации занятий"""
     def __init__(self, message: str, details: Optional[str] = None):
         super().__init__(message=message, details=details)
+
+class LessonImmutableException(ScheduleServiceException):
+    """Занятие защищено от изменения или удаления"""
+
+    def __init__(self, reason: str):
+        super().__init__(
+            message=reason,
+            details="История занятий защищена от изменений",
+        )

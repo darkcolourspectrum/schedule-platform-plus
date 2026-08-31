@@ -4,8 +4,27 @@ Main FastAPI application
 
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.db_errors import translate_integrity_error
+from app.core.exceptions import (
+    ClassroomConflictException,
+    DuplicateLessonException,
+    GenerationException,
+    InvalidLessonStatusException,
+    InvalidTimeRangeException,
+    LessonNotFoundException,
+    PermissionDeniedException,
+    RecurringPatternNotFoundException,
+    ScheduleServiceException,
+    StudentConflictException,
+    TeacherConflictException,
+    LessonImmutableException,
+)
+from app.domain.recurrence import RecurrenceError
 
 from app.config import settings
 from app.api.v1.router import api_router
@@ -15,6 +34,8 @@ from app.messaging.auth_consumer import consumer as auth_consumer
 from app.messaging.admin_consumer import consumer as admin_consumer
 from app.messaging.publisher_worker import init_worker
 from app.database.connection import ScheduleAsyncSessionLocal
+
+from app.services.generation_worker import init_generation_worker
 
 # Настройка логирования
 logging.basicConfig(
@@ -59,10 +80,29 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to start outbox publisher worker: %s", exc)
         raise
 
+    # Фоновое продление горизонта расписания.
+    # Заменяет прежний вызов из GET-запроса расписания студии: просмотр
+    # расписания больше не является операцией записи.
+    if settings.schedule_generation_enabled:
+        try:
+            generation_worker = init_generation_worker(ScheduleAsyncSessionLocal)
+            await generation_worker.start()
+        except Exception as exc:
+            # В отличие от outbox, генерация не критична для старта:
+            # занятия создаются и при сохранении шаблона, воркер лишь
+            # продлевает горизонт. Сервис должен подняться в любом случае.
+            logger.error("Failed to start generation worker: %s", exc)
+    else:
+        logger.info("Schedule generation worker disabled by settings")
+    
     yield
     
     # Shutdown
     logger.info("Shutting down...")
+
+    from app.services.generation_worker import worker as generation_worker
+    if generation_worker is not None:
+        await generation_worker.stop()
     
     from app.messaging.publisher_worker import worker as outbox_worker
     if outbox_worker is not None:
@@ -95,6 +135,99 @@ app.add_middleware(
 # Подключаем роутеры
 app.include_router(api_router)
 
+# ==================== EXCEPTION HANDLERS ====================
+# Сервисный слой кидает доменные ошибки, ничего не зная про HTTP.
+# Соответствие "доменная ошибка -> код ответа" задаётся здесь один раз.
+# До этого блока любая доменная ошибка превращалась в 500 с пустым телом.
+
+_NOT_FOUND = (RecurringPatternNotFoundException, LessonNotFoundException)
+_CONFLICT = (
+    ClassroomConflictException,
+    TeacherConflictException,
+    StudentConflictException,
+    DuplicateLessonException,
+)
+
+
+@app.exception_handler(RecurringPatternNotFoundException)
+@app.exception_handler(LessonNotFoundException)
+async def not_found_handler(request: Request, exc: ScheduleServiceException):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": exc.message},
+    )
+
+
+@app.exception_handler(ClassroomConflictException)
+@app.exception_handler(TeacherConflictException)
+@app.exception_handler(StudentConflictException)
+@app.exception_handler(DuplicateLessonException)
+async def conflict_handler(request: Request, exc: ScheduleServiceException):
+    """Занятое время или дубль -> 409."""
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": exc.message, "reason": exc.details},
+    )
+
+
+@app.exception_handler(PermissionDeniedException)
+async def permission_denied_handler(
+    request: Request, exc: PermissionDeniedException
+):
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={"detail": exc.message},
+    )
+
+
+@app.exception_handler(RecurrenceError)
+async def recurrence_error_handler(request: Request, exc: RecurrenceError):
+    """Ошибка расчёта повторений (полночь, день недели, периодичность) -> 400."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    """
+    Нарушение констрейнта БД.
+
+    Штатно сюда не попадаем: сервис спрашивает ConflictService заранее.
+    Сюда приходят гонки двух параллельных запросов и расхождения между
+    проверкой и констрейнтом. Распознанные переводим в 409/400,
+    нераспознанные оставляем 500 - это баг, и он должен быть шумным.
+    """
+    domain_exc = translate_integrity_error(exc)
+
+    if domain_exc is None:
+        logger.exception("Unhandled integrity error")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Внутренняя ошибка при сохранении данных"},
+        )
+
+    code = (
+        status.HTTP_409_CONFLICT
+        if isinstance(domain_exc, _CONFLICT)
+        else status.HTTP_400_BAD_REQUEST
+    )
+    return JSONResponse(
+        status_code=code,
+        content={"detail": domain_exc.message},
+    )
+
+
+@app.exception_handler(ScheduleServiceException)
+async def schedule_exception_handler(
+    request: Request, exc: ScheduleServiceException
+):
+    """Остальные доменные ошибки -> 400."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": exc.message},
+    )
 
 @app.get("/")
 async def root():

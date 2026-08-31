@@ -2,13 +2,17 @@
 Модель шаблона повторяющегося занятия
 """
 
-from typing import Optional
-from datetime import date, time
-from sqlalchemy import String, Integer, Boolean, Date, Time, ForeignKey, Text
+from typing import Optional, TYPE_CHECKING
+from datetime import date
+from sqlalchemy import Integer, Boolean, Date, Text, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.lesson import Lesson
+    from app.models.lesson_student import RecurringPatternStudent
+    from app.models.recurring_pattern_slot import RecurringPatternSlot
 
 class RecurringPattern(Base, TimestampMixin):
     """
@@ -19,6 +23,17 @@ class RecurringPattern(Base, TimestampMixin):
     """
     
     __tablename__ = "recurring_patterns"
+
+    __table_args__ = (
+        CheckConstraint(
+            "week_interval IN (1, 2)",
+            name="ck_pattern_week_interval",
+        ),
+        CheckConstraint(
+            "valid_until IS NULL OR valid_until >= valid_from",
+            name="ck_pattern_valid_range",
+        ),
+    )
     
     # Основные поля
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -26,25 +41,6 @@ class RecurringPattern(Base, TimestampMixin):
     # Привязка к студии и преподавателю
     studio_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     teacher_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    
-    # Кабинет (может быть NULL для онлайн-занятий)
-    classroom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    
-    # Правило повторения
-    day_of_week: Mapped[int] = mapped_column(
-        Integer, 
-        nullable=False,
-        comment="1=Понедельник, 2=Вторник, ..., 7=Воскресенье"
-    )
-    
-    start_time: Mapped[time] = mapped_column(Time, nullable=False)
-    
-    duration_minutes: Mapped[int] = mapped_column(
-        Integer,
-        default=60,
-        nullable=False,
-        comment="Длительность занятия в минутах"
-    )
     
     # Период действия шаблона
     valid_from: Mapped[date] = mapped_column(
@@ -57,6 +53,22 @@ class RecurringPattern(Base, TimestampMixin):
         Date,
         nullable=True,
         comment="До какой даты действует (NULL = бессрочно)"
+    )
+
+    week_interval: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+        comment="1 = каждую неделю, 2 = раз в две недели",
+    )
+
+    anchor_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        comment=(
+            "Опорная дата для расчёта чётности недели при week_interval=2. "
+            "Фиксируется при создании и не меняется при правке valid_from"
+        ),
     )
     
     # Статус
@@ -71,10 +83,17 @@ class RecurringPattern(Base, TimestampMixin):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     # Relationships
+    slots: Mapped[list["RecurringPatternSlot"]] = relationship(
+        "RecurringPatternSlot",
+        back_populates="pattern",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
     lessons: Mapped[list["Lesson"]] = relationship(
         "Lesson",
         back_populates="recurring_pattern",
-        cascade="all, delete-orphan"
+        passive_deletes=True,
     )
     
     students: Mapped[list["RecurringPatternStudent"]] = relationship(
@@ -84,4 +103,7 @@ class RecurringPattern(Base, TimestampMixin):
     )
     
     def __repr__(self) -> str:
-        return f"<RecurringPattern(id={self.id}, teacher_id={self.teacher_id}, day={self.day_of_week}, time={self.start_time})>"
+        return (
+            f"<RecurringPattern(id={self.id}, teacher_id={self.teacher_id}, "
+            f"interval={self.week_interval}w, active={self.is_active})>"
+        )

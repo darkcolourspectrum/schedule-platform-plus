@@ -12,6 +12,8 @@ from sqlalchemy.orm import selectinload
 from app.models.recurring_pattern import RecurringPattern
 from app.models.lesson_student import RecurringPatternStudent
 from app.repositories.base_repository import BaseRepository
+from app.models.recurring_pattern_slot import RecurringPatternSlot
+from app.domain.recurrence import today_in_studio_tz
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +79,7 @@ class RecurringPatternRepository(BaseRepository[RecurringPattern]):
             as_of_date: Дата для проверки (по умолчанию - сегодня)
         """
         if not as_of_date:
-            from datetime import date as dt_date
-            as_of_date = dt_date.today()
+            as_of_date = today_in_studio_tz()
         
         query = select(RecurringPattern).where(
             and_(
@@ -143,3 +144,99 @@ class RecurringPatternRepository(BaseRepository[RecurringPattern]):
         # Добавляем новых
         for student_id in student_ids:
             await self.add_student(pattern_id, student_id)
+
+    async def get_by_id_full(self, pattern_id: int) -> Optional[RecurringPattern]:
+        """
+        Шаблон со слотами и учениками.
+
+        Генератору нужны обе связи сразу. Без selectinload SQLAlchemy
+        в async-режиме бросит MissingGreenlet при первом обращении
+        к pattern.slots, а не сходит в БД тихо, как в синхронном.
+        """
+        result = await self.db.execute(
+            select(RecurringPattern)
+            .options(
+                selectinload(RecurringPattern.slots),
+                selectinload(RecurringPattern.students),
+            )
+            .where(RecurringPattern.id == pattern_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_active_patterns_full(
+        self,
+        as_of_date: Optional[date] = None,
+        studio_id: Optional[int] = None,
+    ) -> List[RecurringPattern]:
+        """
+        Активные шаблоны со слотами и учениками - для пакетной генерации.
+
+        Фильтр по valid_until сравнивает с as_of_date, а не с концом
+        горизонта: шаблон, доживающий до завтра, всё ещё активен и
+        должен догенерировать оставшиеся занятия.
+        """
+        if not as_of_date:
+            as_of_date = today_in_studio_tz()
+
+        query = (
+            select(RecurringPattern)
+            .options(
+                selectinload(RecurringPattern.slots),
+                selectinload(RecurringPattern.students),
+            )
+            .where(
+                and_(
+                    RecurringPattern.is_active == True,
+                    or_(
+                        RecurringPattern.valid_until.is_(None),
+                        RecurringPattern.valid_until >= as_of_date,
+                    ),
+                )
+            )
+        )
+
+        if studio_id is not None:
+            query = query.where(RecurringPattern.studio_id == studio_id)
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def replace_slots(
+        self,
+        pattern_id: int,
+        slots_data: List[dict],
+    ) -> List[RecurringPatternSlot]:
+        """
+        Заменить набор слотов шаблона целиком.
+
+        Каскад ON DELETE CASCADE снимет слоты, а FK на lessons поставит
+        recurring_pattern_slot_id в NULL у связанных занятий. Поэтому
+        удалять будущие занятия удалённых слотов нужно ДО вызова этого
+        метода, пока связь ещё видна.
+
+        Args:
+            slots_data: словари с ключами day_of_week, start_time,
+                duration_minutes, classroom_id.
+        """
+        from sqlalchemy import delete
+
+        await self.db.execute(
+            delete(RecurringPatternSlot).where(
+                RecurringPatternSlot.recurring_pattern_id == pattern_id
+            )
+        )
+
+        created = []
+        for item in slots_data:
+            slot = RecurringPatternSlot(
+                recurring_pattern_id=pattern_id,
+                day_of_week=item["day_of_week"],
+                start_time=item["start_time"],
+                duration_minutes=item.get("duration_minutes", 60),
+                classroom_id=item.get("classroom_id"),
+            )
+            self.db.add(slot)
+            created.append(slot)
+
+        await self.db.flush()
+        return created

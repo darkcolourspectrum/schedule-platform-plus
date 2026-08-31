@@ -2,13 +2,21 @@
 Модель конкретного занятия
 """
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from datetime import date, time
-from sqlalchemy import String, Integer, Date, Time, ForeignKey, Text, Index
+from uuid import UUID
+from sqlalchemy import (
+    String, Integer, Boolean, Date, Time, ForeignKey, Text,
+    Index, CheckConstraint, UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.recurring_pattern import RecurringPattern
+    from app.models.lesson_student import LessonStudent
 
 class Lesson(Base, TimestampMixin):
     """
@@ -21,6 +29,16 @@ class Lesson(Base, TimestampMixin):
     
     __tablename__ = "lessons"
     __table_args__ = (
+        UniqueConstraint(
+            "recurring_pattern_slot_id",
+            "lesson_date",
+            name="uq_lesson_slot_date",
+        ),
+        CheckConstraint("end_time > start_time", name="ck_lesson_time_order"),
+        CheckConstraint(
+            "status IN ('scheduled', 'completed', 'cancelled', 'missed')",
+            name="ck_lesson_status",
+        ),
         Index('idx_studio_date', 'studio_id', 'lesson_date'),
         Index('idx_teacher_date', 'teacher_id', 'lesson_date'),
         Index('idx_classroom_datetime', 'classroom_id', 'lesson_date', 'start_time'),
@@ -43,6 +61,12 @@ class Lesson(Base, TimestampMixin):
         nullable=True,
         comment="NULL = разовое занятие, иначе - сгенерировано из шаблона"
     )
+
+    recurring_pattern_slot_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("recurring_pattern_slots.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Слот, из которого выросло занятие. Держит уникальность",
+    )
     
     # Дата и время занятия
     lesson_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -55,6 +79,22 @@ class Lesson(Base, TimestampMixin):
         default="scheduled",
         nullable=False,
         comment="scheduled, completed, cancelled, missed"
+    )
+
+    is_manually_modified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment=(
+            "Занятие правили вручную (перенос, смена кабинета). "
+            "Перегенерация из шаблона такие занятия не трогает"
+        ),
+    )
+
+    generation_batch_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        comment="ID прогона генерации - по нему работает откат",
     )
     
     # Дополнительная информация

@@ -6,13 +6,17 @@ from app.core.exceptions import (
     RecurringPatternNotFoundException,
     LessonNotFoundException,
     ClassroomConflictException,
+    TeacherConflictException,
+    StudentConflictException,
+    DuplicateLessonException,
     InvalidTimeRangeException,
     InvalidLessonStatusException,
     PermissionDeniedException,
     StudioNotFoundException,
     ClassroomNotFoundException,
     UserNotFoundException,
-    GenerationException
+    GenerationException,
+    LessonImmutableException,
 )
 
 __all__ = [
@@ -22,6 +26,9 @@ __all__ = [
     "RecurringPatternNotFoundException",
     "LessonNotFoundException",
     "ClassroomConflictException",
+    "TeacherConflictException",
+    "StudentConflictException",
+    "DuplicateLessonException",
     "InvalidTimeRangeException",
     "InvalidLessonStatusException",
     "PermissionDeniedException",
@@ -29,4 +36,5 @@ __all__ = [
     "ClassroomNotFoundException",
     "UserNotFoundException",
     "GenerationException",
+    "LessonImmutableException",
 ]

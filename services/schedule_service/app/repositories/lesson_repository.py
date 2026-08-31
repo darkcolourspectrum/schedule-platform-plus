@@ -3,9 +3,9 @@ Repository для работы с Lessons
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import date, time
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -112,28 +112,6 @@ class LessonRepository(BaseRepository[Lesson]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
     
-    async def check_classroom_conflict(
-        self,
-        classroom_id: int,
-        lesson_date: date,
-        start_time: time,
-        end_time: time,
-        exclude_lesson_id: Optional[int] = None
-    ) -> bool:
-        """
-        Проверить конфликт кабинета
-        
-        Returns:
-            True если есть конфликт, False если нет
-        """
-        lessons = await self.get_by_classroom(classroom_id, lesson_date, exclude_lesson_id)
-        
-        for lesson in lessons:
-            # Проверяем пересечение временных интервалов
-            if (start_time < lesson.end_time and end_time > lesson.start_time):
-                return True
-        
-        return False
     
     async def get_by_pattern(
         self,
@@ -152,15 +130,6 @@ class LessonRepository(BaseRepository[Lesson]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
     
-    async def get_last_generated_lesson(self, pattern_id: int) -> Optional[Lesson]:
-        """Получить последнее сгенерированное занятие из шаблона"""
-        result = await self.db.execute(
-            select(Lesson)
-            .where(Lesson.recurring_pattern_id == pattern_id)
-            .order_by(Lesson.lesson_date.desc())
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
     
     async def add_student(self, lesson_id: int, student_id: int) -> LessonStudent:
         """Добавить ученика к занятию"""
@@ -214,3 +183,51 @@ class LessonRepository(BaseRepository[Lesson]):
             )
         )
         return result.scalar_one()
+
+    async def get_students(self, lesson_id: int) -> List[LessonStudent]:
+        """
+        Ученики занятия вместе со статусом посещения.
+
+        Прежний get_student_ids отдавал только id, поэтому эндпоинты
+        подставляли attendance_status из головы. Теперь статус читается
+        оттуда, где он хранится.
+        """
+        result = await self.db.execute(
+            select(LessonStudent).where(LessonStudent.lesson_id == lesson_id)
+        )
+        return list(result.scalars().all())
+
+    async def set_attendance_for_all(
+        self, lesson_id: int, attendance_status: str
+    ) -> int:
+        """Проставить один статус посещения всем ученикам занятия."""
+        result = await self.db.execute(
+            update(LessonStudent)
+            .where(LessonStudent.lesson_id == lesson_id)
+            .values(attendance_status=attendance_status)
+        )
+        await self.db.flush()
+        return result.rowcount or 0
+
+    async def set_attendance_bulk(
+        self, lesson_id: int, attendance: Dict[int, str]
+    ) -> int:
+        """
+        Проставить посещаемость поимённо.
+
+        Ученики, не упомянутые в словаре, не трогаются: преподаватель мог
+        отметить только тех, кто не пришёл.
+        """
+        updated = 0
+        for student_id, status_value in attendance.items():
+            result = await self.db.execute(
+                update(LessonStudent)
+                .where(
+                    LessonStudent.lesson_id == lesson_id,
+                    LessonStudent.student_id == student_id,
+                )
+                .values(attendance_status=status_value)
+            )
+            updated += result.rowcount or 0
+        await self.db.flush()
+        return updated

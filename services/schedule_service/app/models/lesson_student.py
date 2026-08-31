@@ -2,11 +2,15 @@
 Модели связей занятий и шаблонов с учениками
 """
 
+from typing import TYPE_CHECKING
 from sqlalchemy import Integer, String, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.lesson import Lesson
+    from app.models.recurring_pattern import RecurringPattern
 
 class LessonStudent(Base, TimestampMixin):
     """
