@@ -19,6 +19,9 @@ from app.messaging.handlers import (
     handle_lesson_created,
     handle_lesson_cancelled,
     handle_lesson_rescheduled,
+    handle_pattern_assigned,
+    handle_pattern_changed,
+    handle_pattern_unassigned,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,9 @@ HANDLERS: Dict[str, Callable[[dict], Awaitable[None]]] = {
     "lesson.created": handle_lesson_created,
     "lesson.cancelled": handle_lesson_cancelled,
     "lesson.rescheduled": handle_lesson_rescheduled,
+    "pattern.assigned": handle_pattern_assigned,
+    "pattern.changed": handle_pattern_changed,
+    "pattern.unassigned": handle_pattern_unassigned,
 }
 
 
@@ -85,6 +91,10 @@ class EventConsumer:
         
         # Биндим очередь на все события lesson.*
         await queue.bind(exchange, routing_key="lesson.*")
+        
+        # События шаблонов. Технический поток generation.* сюда не
+        # привязан намеренно: он про строки в базе, а не про человека.
+        await queue.bind(exchange, routing_key="pattern.*")
         
         await queue.consume(self._on_message)
         logger.info(

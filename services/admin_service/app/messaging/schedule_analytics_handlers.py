@@ -1,11 +1,25 @@
 """
 Обработчики событий Schedule Service ('schedule_events') для аналитики.
 
-Слушаем три события занятий:
-    - lesson.created      -> создаём ряд в lesson_facts (status=scheduled)
-    - lesson.cancelled    -> отмечаем отмену (status=cancelled, cancelled_at)
-    - lesson.rescheduled  -> обновляем дату занятия, инкрементируем
-                             rescheduled_count. НЕ отмена!
+Слушаем события занятий:
+    - lesson.created                -> создаём ряд в lesson_facts
+    - lesson.cancelled              -> отмечаем отмену
+    - lesson.rescheduled            -> переносим дату, +1 к rescheduled_count
+    - generation.lessons_created    -> пакет занятий из шаблона, разворачиваем
+                                       в отдельные ряды
+    - generation.lessons_deleted    -> занятия исчезли из расписания,
+                                       убираем ряды
+
+Про generation.*:
+    Занятия из шаблонов - большинство занятий студии, и до появления этих
+    событий проекция их не видела вовсе: генератор ничего не публиковал.
+    Загрузка студии считалась по одним лишь разовым занятиям.
+
+    Пара событий парная не случайно. Правка шаблона сначала удаляет
+    будущие занятия, потом создаёт новые, и без второй половины проекция
+    накапливала бы ряды о занятиях, которых больше нет в расписании.
+    Это хуже прежнего недосчёта: заниженное число выглядит подозрительно,
+    завышенное - правдоподобно.
 
 Каждый handler следует общему паттерну проекта:
     1. Идемпотентность через processed_events (по event_id).
@@ -33,7 +47,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -283,6 +297,148 @@ async def handle_lesson_rescheduled(event: Dict[str, Any]) -> None:
             logger.info(
                 "lesson.rescheduled applied: lesson_id=%s event_id=%s",
                 event["lesson_id"], event_id,
+            )
+        except IntegrityError as exc:
+            await session.rollback()
+            logger.debug(
+                "Event processed concurrently, skipping: event_id=%s err=%s",
+                event_id, exc,
+            )
+
+async def handle_generation_lessons_created(event: Dict[str, Any]) -> None:
+    """
+    Обработать 'generation.lessons_created' - пакет занятий из шаблона.
+
+    Одно событие соответствует одному прогону генерации и несёт от одного
+    до нескольких десятков занятий. Разворачиваем пакет в отдельные ряды
+    lesson_facts одним запросом.
+
+    Шапка события - студия, преподаватель, ученики - общая для всего
+    пакета: занятия выросли из одного шаблона, и состав у них одинаковый.
+    Различаются только дата, кабинет и id.
+
+    Идемпотентность - одна запись в processed_events на весь пакет.
+    Повторная доставка не создаст дублей и не оставит работу сделанной
+    наполовину: ряды и отметка об обработке уходят одной транзакцией.
+    """
+    event_id = UUID(str(event["event_id"]))
+    occurred_at = _parse_dt(event["occurred_at"])
+    now = datetime.now(timezone.utc)
+
+    lessons: List[Dict[str, Any]] = event.get("lessons") or []
+    if not lessons:
+        logger.warning(
+            "generation.lessons_created without lessons: event_id=%s", event_id
+        )
+        return
+
+    student_count = _student_count(event)
+
+    async with AdminAsyncSessionLocal() as session:
+        try:
+            if await _is_already_processed(session, event_id):
+                logger.debug(
+                    "Event already processed, skipping: event_id=%s", event_id
+                )
+                return
+
+            rows = [
+                {
+                    "id": item["lesson_id"],
+                    "teacher_id": event["teacher_id"],
+                    "studio_id": event["studio_id"],
+                    "classroom_id": item.get("classroom_id"),
+                    "status": "scheduled",
+                    "lesson_date": _parse_date(item["lesson_date"]),
+                    "student_count": student_count,
+                    "rescheduled_count": 0,
+                    "cancellation_reason": None,
+                    "lesson_created_at": occurred_at,
+                    "cancelled_at": None,
+                    "updated_at": occurred_at,
+                    "synced_at": now,
+                }
+                for item in lessons
+            ]
+
+            stmt = pg_insert(LessonFact).values(rows)
+            # Тот же набор полей и та же out-of-order защита, что
+            # у lesson.created: status и cancelled_at не трогаем, чтобы
+            # запоздавшая генерация не воскресила отменённое занятие.
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["id"],
+                set_={
+                    "teacher_id": stmt.excluded.teacher_id,
+                    "studio_id": stmt.excluded.studio_id,
+                    "classroom_id": stmt.excluded.classroom_id,
+                    "lesson_date": stmt.excluded.lesson_date,
+                    "student_count": stmt.excluded.student_count,
+                    "lesson_created_at": stmt.excluded.lesson_created_at,
+                    "updated_at": stmt.excluded.updated_at,
+                },
+                where=LessonFact.updated_at < stmt.excluded.updated_at,
+            )
+            await session.execute(stmt)
+
+            await _mark_processed(session, event_id, "generation.lessons_created")
+            await session.commit()
+
+            logger.info(
+                "generation.lessons_created applied: pattern_id=%s lessons=%s event_id=%s",
+                event.get("pattern_id"), len(rows), event_id,
+            )
+        except IntegrityError as exc:
+            await session.rollback()
+            logger.debug(
+                "Event processed concurrently, skipping: event_id=%s err=%s",
+                event_id, exc,
+            )
+
+
+async def handle_generation_lessons_deleted(event: Dict[str, Any]) -> None:
+    """
+    Обработать 'generation.lessons_deleted' - занятия исчезли из расписания.
+
+    Ряды удаляются, а не помечаются: занятие, стёртое до того, как оно
+    состоялось, не является фактом. Оставить его со статусом означало бы
+    завысить и загрузку студии, и число отмен.
+
+    Порядок доставки здесь важен. Событие удаления осмысленно только
+    после события создания тех же занятий, и на этом мы стоим:
+    publisher-воркер Schedule читает outbox строго по created_at,
+    очередь у потребителя одна, сообщения обрабатываются
+    последовательно. Если порядок когда-нибудь нарушится, удаление
+    просто не найдёт рядов и промолчит, а следом придёт создание
+    и оставит осиротевший ряд - это будет видно как расхождение
+    числа занятий между schedule и admin.
+    """
+    event_id = UUID(str(event["event_id"]))
+
+    lesson_ids: List[int] = event.get("lesson_ids") or []
+    if not lesson_ids:
+        logger.warning(
+            "generation.lessons_deleted without lesson_ids: event_id=%s", event_id
+        )
+        return
+
+    async with AdminAsyncSessionLocal() as session:
+        try:
+            if await _is_already_processed(session, event_id):
+                logger.debug(
+                    "Event already processed, skipping: event_id=%s", event_id
+                )
+                return
+
+            result = await session.execute(
+                delete(LessonFact).where(LessonFact.id.in_(lesson_ids))
+            )
+
+            await _mark_processed(session, event_id, "generation.lessons_deleted")
+            await session.commit()
+
+            logger.info(
+                "generation.lessons_deleted applied: reason=%s requested=%s removed=%s event_id=%s",
+                event.get("reason"), len(lesson_ids), result.rowcount or 0, event_id,
             )
         except IntegrityError as exc:
             await session.rollback()

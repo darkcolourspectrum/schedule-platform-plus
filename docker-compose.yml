@@ -279,6 +279,7 @@ services:
       DATABASE_USER: postgres
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/schedule_service_db
+      RABBITMQ_URL: ${RABBITMQ_URL}
 
       # Redis (DB 4 для Schedule Service)
       REDIS_HOST: redis
@@ -446,6 +447,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - schedule_platform_network

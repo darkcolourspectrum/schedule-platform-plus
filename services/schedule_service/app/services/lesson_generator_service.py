@@ -40,12 +40,22 @@ from app.domain.recurrence import (
     slot_occurrence_dates,
     today_in_studio_tz,
 )
+
+from app.messaging import (
+    GeneratedLessonItem,
+    record_generation_lessons_created,
+    record_generation_lessons_deleted,
+    DELETION_REASON_BATCH_ROLLED_BACK,
+)
+
 from app.models.recurring_pattern import RecurringPattern
 from app.models.recurring_pattern_slot import RecurringPatternSlot
 from app.repositories.lesson_generation_repository import (
     LessonGenerationRepository,
 )
 from app.services.conflict_service import ConflictService
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +109,24 @@ class GenerationPlan:
     def blocked_count(self) -> int:
         return len(self.blocked)
 
+@dataclass(frozen=True)
+class CreatedLesson:
+    """
+    Занятие, которое генератор действительно создал.
+
+    От PlannedLesson отличается двумя вещами: у него есть id, выданный
+    базой, и оно существует. План расходится с фактом, когда строку
+    отбивает уникальный ключ или EXCLUDE-констрейнт, поэтому список
+    собирается из ответа вставки, а не из плана.
+    """
+
+    lesson_id: int
+    slot_id: Optional[int]
+    lesson_date: date
+    start_time: time
+    end_time: time
+    classroom_id: Optional[int]
+
 
 @dataclass
 class GenerationResult:
@@ -110,6 +138,7 @@ class GenerationResult:
     already_existed_count: int
     blocked: List[BlockedLesson] = field(default_factory=list)
     horizon_end: Optional[date] = None
+    created: List[CreatedLesson] = field(default_factory=list)
 
 
 class LessonGeneratorService:
@@ -119,9 +148,19 @@ class LessonGeneratorService:
         self,
         generation_repo: LessonGenerationRepository,
         conflict_service: ConflictService,
+        db: AsyncSession,
     ):
+        """
+        Args:
+            db: та же сессия, на которой построен generation_repo.
+                Нужна, чтобы записывать события в outbox той же
+                транзакцией, что и сами занятия. Разные сессии здесь
+                означали бы разные транзакции, а значит возможность
+                опубликовать событие о занятиях, которых нет.
+        """
         self.generation_repo = generation_repo
         self.conflict_service = conflict_service
+        self.db = db
 
     # ==================== ПЛАНИРОВАНИЕ ====================
 
@@ -386,6 +425,41 @@ class LessonGeneratorService:
             ]
             await self.generation_repo.insert_lesson_students(pairs)
 
+        # Сшиваем факт с планом. insert_lessons возвращает только
+        # (id, slot_id, дата) - времени и кабинета там нет, а они нужны
+        # и событию, и предстоящим напоминаниям. Ключ "слот + дата"
+        # уникален по констрейнту uq_lesson_slot_date, поэтому
+        # совпадение однозначно.
+        planned_by_key = {
+            (item.slot_id, item.lesson_date): item for item in plan.to_create
+        }
+
+        created: List[CreatedLesson] = []
+        for lesson_id, slot_id, lesson_date in inserted:
+            source = planned_by_key.get((slot_id, lesson_date))
+            if source is None:
+                # База вернула строку, которой нет в плане. Такого быть
+                # не должно. Пропускаем молча в данных, но громко в логах:
+                # выдумывать время и кабинет нельзя.
+                logger.warning(
+                    "Inserted lesson %s (slot %s, %s) is missing from plan",
+                    lesson_id,
+                    slot_id,
+                    lesson_date,
+                )
+                continue
+
+            created.append(
+                CreatedLesson(
+                    lesson_id=lesson_id,
+                    slot_id=slot_id,
+                    lesson_date=lesson_date,
+                    start_time=source.start_time,
+                    end_time=source.end_time,
+                    classroom_id=source.classroom_id,
+                )
+            )
+        
         # Расхождение между планом и фактом означает гонку: кто-то занял
         # слот между проверкой конфликтов и вставкой. База это отбила,
         # данные целы, но факт стоит зафиксировать в логах.
@@ -409,6 +483,40 @@ class LessonGeneratorService:
             plan.horizon_end,
         )
 
+        # Технический факт "в расписании появились строки". Пишется в ту
+        # же транзакцию, что и сами занятия: событие о занятиях, которых
+        # нет, невозможно в принципе - либо коммитится и то и другое,
+        # либо ничего.
+        #
+        # Запись стоит здесь, а не у вызывающих, намеренно. generate_pattern
+        # зовут из четырёх мест: создание шаблона, правка шаблона, ручной
+        # эндпоинт генерации и ежечасное продление горизонта фоновым
+        # воркером. Забыть публикацию в одном из них - вопрос времени,
+        # и проявилось бы это тихо: занятия есть, аналитика их не видит.
+        #
+        # Рассыльщикам это событие не достанется: очереди notification
+        # и vk_bot привязаны к ключу 'lesson.*', а здесь 'generation.*'.
+        
+        await record_generation_lessons_created(
+            self.db,
+            pattern_id=pattern.id,
+            batch_id=batch_id,
+            studio_id=pattern.studio_id,
+            teacher_id=pattern.teacher_id,
+            student_ids=list(student_ids),
+            lessons=[
+                GeneratedLessonItem(
+                    lesson_id=item.lesson_id,
+                    slot_id=item.slot_id,
+                    lesson_date=item.lesson_date.isoformat(),
+                    start_time=item.start_time.isoformat(),
+                    end_time=item.end_time.isoformat(),
+                    classroom_id=item.classroom_id,
+                )
+                for item in created
+            ],
+        )
+
         return GenerationResult(
             batch_id=batch_id,
             created_count=len(inserted),
@@ -416,7 +524,50 @@ class LessonGeneratorService:
             already_existed_count=plan.already_exists_count,
             blocked=plan.blocked,
             horizon_end=plan.horizon_end,
+            created=created,
         )
+
+    async def remove_future_lessons_for_slots(
+        self,
+        *,
+        slot_ids: Sequence[int],
+        pattern_id: int,
+        reason: str,
+    ) -> List[int]:
+        """
+        Удалить будущие несостоявшиеся занятия слотов и записать событие.
+
+        Обёртка над репозиторием, добавляющая к удалению его публичную
+        половину. Живёт здесь, а не в RecurringPatternService, по той же
+        причине, по которой здесь же стоит публикация о создании: все
+        события потока generation.* собраны в одном месте, и добавление
+        нового пути удаления не может тихо остаться без события.
+
+        Условия удаления задаёт репозиторий: только будущее, только
+        статус scheduled, только занятия без ручных правок.
+
+        Args:
+            reason: одна из DELETION_REASON_* из app.messaging. Уходит
+                в payload и нужна при разборе расхождений в аналитике.
+
+        Returns:
+            ID удалённых занятий.
+
+        Не коммитит.
+        """
+        deleted_ids = await self.generation_repo.delete_future_lessons_for_slots(
+            slot_ids=slot_ids,
+            not_before=today_in_studio_tz(),
+        )
+
+        await record_generation_lessons_deleted(
+            self.db,
+            lesson_ids=deleted_ids,
+            reason=reason,
+            pattern_id=pattern_id,
+        )
+
+        return deleted_ids
 
     # ==================== ОТКАТ ====================
 
@@ -429,9 +580,18 @@ class LessonGeneratorService:
         необратимой: одно действие возвращает расписание к прежнему виду.
 
         Returns:
-            Количество удалённых занятий.
+        Количество удалённых занятий.
         """
-        return await self.generation_repo.delete_generation_batch(
+        deleted_lesson_ids = await self.generation_repo.delete_generation_batch(
             batch_id=batch_id,
             not_before=today_in_studio_tz(),
         )
+
+        await record_generation_lessons_deleted(
+            self.db,
+            lesson_ids=deleted_lesson_ids,
+            reason=DELETION_REASON_BATCH_ROLLED_BACK,
+            batch_id=batch_id,
+        )
+
+        return len(deleted_lesson_ids)

@@ -19,7 +19,7 @@ event_type не передаётся в payload - он определяется 
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -240,3 +240,189 @@ async def handle_lesson_rescheduled(event: Dict[str, Any]) -> None:
             await db.rollback()
             logger.debug("Event processed concurrently, skipping: event_id=%s err=%s",
                          event_id, exc)
+
+# ==================== СОБЫТИЯ ШАБЛОНОВ ====================
+#
+# Три события вместо одного, потому что это три разных факта с разными
+# адресатами. При одном сохранении формы админом могут случиться все три
+# сразу: расписание сдвинули, кого-то добавили, кого-то сняли.
+#
+# Разделение сделано на стороне отправителя: routing key определяет, кому
+# и о чём пишем, а handler'у остаётся только текст. Это намеренно -
+# фильтрация "а это событие про меня?" внутри потребителя быстро
+# превращается в набор условий, которые никто не решается тронуть.
+#
+# Технический поток generation.* сюда не приходит вовсе: очередь
+# привязана к 'lesson.*' и 'pattern.*'. Иначе ученик получал бы
+# сообщение каждый раз, когда фоновый воркер продлевает горизонт.
+
+_MONTHS_GENITIVE = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+
+def _format_date(iso_date: str) -> str:
+    """ISO-дату '2026-09-03' в человеческое '3 сентября'."""
+    try:
+        _, month, day = (int(part) for part in iso_date.split("-"))
+        return f"{day} {_MONTHS_GENITIVE[month - 1]}"
+    except (ValueError, IndexError):
+        return iso_date
+
+
+def _upcoming_hint(dates: Optional[List[str]]) -> str:
+    """
+    Хвост сообщения с ближайшей датой.
+
+    Расписания словами мало: "занятия по вторникам" не отвечает на вопрос
+    "а когда первое". Если дат нет - молчим, вместо того чтобы обещать
+    занятие, которого в базе не оказалось.
+    """
+    if not dates:
+        return ""
+    return f" Ближайшее занятие - {_format_date(dates[0])}."
+
+
+async def _notify_students(
+    *,
+    event_id: UUID,
+    event_type: str,
+    notification_type: str,
+    student_ids: List[int],
+    title: str,
+    message: str,
+    payload: Dict[str, Any],
+) -> None:
+    """
+    Создать одинаковое уведомление каждому ученику из списка.
+
+    Общее тело для трёх событий шаблона: у них различаются только тексты,
+    а идемпотентность, транзакция и логирование одни и те же.
+    """
+    async with AsyncSessionLocal() as db:
+        try:
+            if await _is_already_processed(db, event_id):
+                logger.debug(
+                    "Event already processed, skipping: event_id=%s", event_id
+                )
+                return
+
+            service = NotificationService(db)
+            for student_id in student_ids:
+                await service.create_notification(
+                    user_id=student_id,
+                    type=notification_type,
+                    title=title,
+                    message=message,
+                    payload=payload,
+                )
+
+            await _mark_processed(db, event_id, event_type)
+            await db.commit()
+
+            logger.info(
+                "%s processed: pattern_id=%s notifications=%d event_id=%s",
+                event_type, payload.get("pattern_id"), len(student_ids), event_id,
+            )
+        except IntegrityError as exc:
+            await db.rollback()
+            logger.debug(
+                "Event processed concurrently, skipping: event_id=%s err=%s",
+                event_id, exc,
+            )
+
+
+def _pattern_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Общая часть payload уведомления - для перехода по клику."""
+    return {
+        "pattern_id": event.get("pattern_id"),
+        "studio_id": event.get("studio_id"),
+        "teacher_id": event.get("teacher_id"),
+        "schedule_text": event.get("schedule_text"),
+        "upcoming_dates": event.get("upcoming_dates") or [],
+    }
+
+
+async def handle_pattern_assigned(event: Dict[str, Any]) -> None:
+    """
+    Обработать 'pattern.assigned' - ученику назначили регулярные занятия.
+
+    Адресат - те, для кого расписание новое: все ученики при создании
+    шаблона и только добавленные при правке.
+    """
+    student_ids: List[int] = event.get("student_ids") or []
+    if not student_ids:
+        return
+
+    schedule_text = event.get("schedule_text") or ""
+
+    await _notify_students(
+        event_id=UUID(str(event["event_id"])),
+        event_type="pattern.assigned",
+        notification_type="pattern_assigned",
+        student_ids=student_ids,
+        title="Регулярные занятия",
+        message=(
+            f"Вам назначены регулярные занятия: {schedule_text}."
+            f"{_upcoming_hint(event.get('upcoming_dates'))}"
+        ),
+        payload=_pattern_payload(event),
+    )
+
+
+async def handle_pattern_changed(event: Dict[str, Any]) -> None:
+    """
+    Обработать 'pattern.changed' - расписание регулярных занятий сдвинулось.
+
+    Адресат - те, кто был в шаблоне и остался: только им осмысленно
+    говорить "было так, стало эдак".
+    """
+    student_ids: List[int] = event.get("student_ids") or []
+    if not student_ids:
+        return
+
+    schedule_text = event.get("schedule_text") or ""
+    previous = event.get("previous_schedule_text")
+
+    message = f"Ваши регулярные занятия теперь проходят так: {schedule_text}."
+    if previous:
+        message += f" Раньше было: {previous}."
+    message += _upcoming_hint(event.get("upcoming_dates"))
+
+    await _notify_students(
+        event_id=UUID(str(event["event_id"])),
+        event_type="pattern.changed",
+        notification_type="pattern_changed",
+        student_ids=student_ids,
+        title="Расписание изменилось",
+        message=message,
+        payload=_pattern_payload(event),
+    )
+
+
+async def handle_pattern_unassigned(event: Dict[str, Any]) -> None:
+    """
+    Обработать 'pattern.unassigned' - ученика сняли с регулярных занятий.
+
+    Его будущие занятия к этому моменту уже удалены из расписания,
+    поэтому уведомление - единственный способ об этом узнать.
+    """
+    student_ids: List[int] = event.get("student_ids") or []
+    if not student_ids:
+        return
+
+    previous = event.get("previous_schedule_text") or ""
+
+    await _notify_students(
+        event_id=UUID(str(event["event_id"])),
+        event_type="pattern.unassigned",
+        notification_type="pattern_unassigned",
+        student_ids=student_ids,
+        title="Регулярные занятия отменены",
+        message=(
+            f"Занятия по расписанию {previous} больше не проводятся. "
+            f"Будущие занятия убраны из вашего расписания."
+        ),
+        payload=_pattern_payload(event),
+    )

@@ -95,4 +95,8 @@ async def create_notification_dev(
         message=data.message,
         payload=data.payload,
     )
+    # Репозиторий больше не коммитит - это забрали обработчики событий,
+    # которым нужна одна транзакция на всё событие. Здесь транзакция
+    # состоит из одного уведомления, поэтому коммитим сразу.
+    await service.db.commit()
     return notification

@@ -20,22 +20,12 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.domain.recurrence import (
+    DAY_NAMES,
     WORKING_DAYS,
     LessonCrossesMidnightError,
     calculate_end_time,
     find_overlapping_slot_pairs,
 )
-
-
-DAY_NAMES = {
-    1: "понедельник",
-    2: "вторник",
-    3: "среда",
-    4: "четверг",
-    5: "пятница",
-    6: "суббота",
-    7: "воскресенье",
-}
 
 
 # ==================== СЛОТЫ ====================

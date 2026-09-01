@@ -81,18 +81,35 @@ async def get_conflict_service(
 async def get_generator_service(
     generation_repo: LessonGenerationRepository = Depends(get_generation_repository),
     conflict_service: ConflictService = Depends(get_conflict_service),
+    db: AsyncSession = Depends(get_db),
 ) -> LessonGeneratorService:
-    """Get LessonGeneratorService"""
-    return LessonGeneratorService(generation_repo, conflict_service)
+    """
+    Get LessonGeneratorService.
+
+    db здесь - тот же объект сессии, что внутри generation_repo: FastAPI
+    кеширует результат зависимости в пределах одного запроса, поэтому
+    get_db вызывается один раз на всю цепочку.
+    """
+    return LessonGeneratorService(
+        generation_repo=generation_repo,
+        conflict_service=conflict_service,
+        db=db,
+    )
 
 
 async def get_pattern_service(
     pattern_repo: RecurringPatternRepository = Depends(get_pattern_repository),
     generation_repo: LessonGenerationRepository = Depends(get_generation_repository),
     generator_service: LessonGeneratorService = Depends(get_generator_service),
+    db: AsyncSession = Depends(get_db),
 ) -> RecurringPatternService:
     """Get RecurringPatternService"""
-    return RecurringPatternService(pattern_repo, generation_repo, generator_service)
+    return RecurringPatternService(
+        pattern_repo=pattern_repo,
+        generation_repo=generation_repo,
+        generator_service=generator_service,
+        db=db,
+    )
 
 
 async def get_lesson_service(

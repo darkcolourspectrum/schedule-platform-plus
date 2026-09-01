@@ -21,7 +21,14 @@ class NotificationRepository:
         message: str,
         payload: Optional[Dict[str, Any]] = None,
     ) -> Notification:
-        """Создать уведомление"""
+        """
+        Создать уведомление.
+
+        Не коммитит: транзакцией распоряжается вызывающий.
+
+        flush нужен, чтобы объект получил id до возврата, refresh -
+        чтобы подтянуть проставленные базой значения.
+        """
         notification = Notification(
             user_id=user_id,
             type=type,
@@ -30,7 +37,7 @@ class NotificationRepository:
             payload=payload,
         )
         self.db.add(notification)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(notification)
         return notification
     

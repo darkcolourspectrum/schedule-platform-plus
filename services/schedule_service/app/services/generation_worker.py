@@ -277,6 +277,7 @@ class ScheduleGenerationWorker:
                     conflict_service=ConflictService(
                         ConflictRepository(session)
                     ),
+                    db=session,
                 )
 
                 result = await generator.generate_pattern(

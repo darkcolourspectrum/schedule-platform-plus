@@ -33,9 +33,14 @@ from typing import List, Optional, Sequence, Tuple
 
 from app.core.exceptions import RecurringPatternNotFoundException
 from app.domain.conflicts import Conflict, ConflictKind
-from app.domain.recurrence import today_in_studio_tz
+from app.domain.recurrence import (
+    DAY_NAMES,
+    calculate_end_time,
+    today_in_studio_tz,
+)
 from app.models.recurring_pattern import RecurringPattern
 from app.models.recurring_pattern_slot import RecurringPatternSlot
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.lesson_generation_repository import (
     LessonGenerationRepository,
 )
@@ -53,6 +58,15 @@ from app.services.lesson_generator_service import (
     GenerationPlan,
     GenerationResult,
     LessonGeneratorService,
+)
+
+from app.messaging import (
+    DELETION_REASON_PATTERN_DELETED,
+    DELETION_REASON_PATTERN_UPDATED,
+    PatternSlotItem,
+    record_pattern_assigned,
+    record_pattern_changed,
+    record_pattern_unassigned,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,10 +87,64 @@ class RecurringPatternService:
         pattern_repo: RecurringPatternRepository,
         generation_repo: LessonGenerationRepository,
         generator_service: LessonGeneratorService,
+        db: AsyncSession,
     ):
+        """
+        Args:
+            db: та же сессия, что у репозиториев. Нужна для записи
+                событий в outbox одной транзакцией с изменением шаблона.
+        """
         self.pattern_repo = pattern_repo
         self.generation_repo = generation_repo
         self.generator_service = generator_service
+        self.db = db
+
+    # ==================== СЛУЖЕБНОЕ ====================
+
+    @staticmethod
+    def _slot_items(slots: Sequence[RecurringPatternSlot]) -> List[PatternSlotItem]:
+        """
+        Слоты шаблона в форме, пригодной для события.
+
+        end_time в слотах не хранится - в БД лежит длительность.
+        Считается тем же calculate_end_time, что и при создании занятий:
+        в сообщении ученику должно стоять ровно то время, которое стоит
+        в расписании, а не пересчитанное вторым способом.
+        """
+        return [
+            PatternSlotItem(
+                day_of_week=slot.day_of_week,
+                day_name=DAY_NAMES[slot.day_of_week],
+                start_time=slot.start_time.isoformat(),
+                end_time=calculate_end_time(
+                    slot.start_time, slot.duration_minutes
+                ).isoformat(),
+                classroom_id=slot.classroom_id,
+            )
+            for slot in slots
+        ]
+
+    @staticmethod
+    def _slots_differ(
+        before: Sequence[PatternSlotItem],
+        after: Sequence[PatternSlotItem],
+    ) -> bool:
+        """
+        Изменился ли набор слотов по существу.
+
+        Порядок слотов в форме значения не имеет, поэтому сравниваются
+        отсортированные наборы. Нужно, чтобы не писать ученику "было
+        вторник 18:00, стало вторник 18:00", когда сохранили форму,
+        ничего в ней не тронув, - фронт присылает слоты при каждом
+        сохранении, даже если правили только заметку.
+        """
+        def signature(items: Sequence[PatternSlotItem]):
+            return sorted(
+                (item.day_of_week, item.start_time, item.end_time, item.classroom_id)
+                for item in items
+            )
+
+        return signature(before) != signature(after)
 
     # ==================== ЧТЕНИЕ ====================
 
@@ -201,6 +269,28 @@ class RecurringPatternService:
             student_ids=data.student_ids,
         )
 
+        # Факт "ученику назначили регулярные занятия".
+        # Уходит рассыльщикам той же транзакцией, что и сам шаблон.
+        #
+        # Даты берём из БД, а не из result: занятия только что созданы
+        # в этой же транзакции и видны текущей сессии, а логика "какие
+        # даты назвать ученику" оказывается одна на создание и на правку.
+        if data.student_ids:
+            upcoming_dates = await self.generation_repo.get_future_scheduled_lesson_dates(
+                pattern_id=pattern.id,
+                not_before=today_in_studio_tz(),
+            )
+            await record_pattern_assigned(
+                self.db,
+                pattern_id=pattern.id,
+                studio_id=pattern.studio_id,
+                teacher_id=pattern.teacher_id,
+                student_ids=list(data.student_ids),
+                slots=self._slot_items(slots),
+                upcoming_dates=upcoming_dates,
+                valid_until=pattern.valid_until,
+            )
+
         logger.info(
             "Created pattern %s with %s slots, generated %s lessons",
             pattern.id,
@@ -230,8 +320,14 @@ class RecurringPatternService:
             3. Сгенерировать заново на горизонт.
 
         Расписание пересобирается только если менялось что-то, влияющее на
-        даты: слоты, период действия, периодичность. Правка заметок или
-        списка учеников занятия не трогает.
+        даты: слоты, период действия, периодичность. Правка заметок даты
+        занятий не трогает.
+
+        Состав учеников - отдельная история. Он не влияет на даты, поэтому
+        пересборку не запускает, но должен доехать до уже созданных будущих
+        занятий: добавленного ученика надо в них вписать, убранного -
+        вычеркнуть. Без этого шаблон и занятия расходятся, и расписание
+        ученика показывает не то, что записано в шаблоне.
         """
         pattern = await self.get_pattern(pattern_id)
         today = today_in_studio_tz()
@@ -245,14 +341,15 @@ class RecurringPatternService:
 
         if schedule_changed:
             old_slot_ids = [slot.id for slot in pattern.slots]
-            deleted = await self.generation_repo.delete_future_lessons_for_slots(
+            deleted_lesson_ids = await self.generator_service.remove_future_lessons_for_slots(
                 slot_ids=old_slot_ids,
-                not_before=today,
+                pattern_id=pattern_id,
+                reason=DELETION_REASON_PATTERN_UPDATED,
             )
             logger.info(
                 "Pattern %s update: removed %s future lessons before rebuild",
                 pattern_id,
-                deleted,
+                len(deleted_lesson_ids),
             )
 
         if data.valid_from is not None:
@@ -266,6 +363,15 @@ class RecurringPatternService:
         if data.notes is not None:
             pattern.notes = data.notes
 
+        # Снимок прежнего расписания. Именно снимок значений, а не список
+        # ORM-объектов: replace_slots ниже удалит эти строки, SQLAlchemy
+        # пометит объекты удалёнными и обесценит их атрибуты, и любое
+        # последующее обращение к slot.day_of_week попытается сходить
+        # за обновлением в БД - синхронно, из async-кода. Это и есть
+        # MissingGreenlet. PatternSlotItem - обычные значения, они
+        # переживают что угодно.
+        previous_slot_items = self._slot_items(pattern.slots)
+
         if data.slots is not None:
             slots = await self.pattern_repo.replace_slots(
                 pattern_id,
@@ -274,33 +380,147 @@ class RecurringPatternService:
         else:
             slots = list(pattern.slots)
 
+        # Прежний состав фиксируем ДО обновления связей: после
+        # update_students узнать его будет уже негде.
+        previous_student_ids = [item.student_id for item in pattern.students]
+
         if data.student_ids is not None:
             await self.pattern_repo.update_students(pattern_id, data.student_ids)
-            student_ids = data.student_ids
+            student_ids = list(data.student_ids)
+
+            added_student_ids = [
+                item for item in student_ids if item not in previous_student_ids
+            ]
+            removed_student_ids = [
+                item for item in previous_student_ids if item not in student_ids
+            ]
+
+            if added_student_ids or removed_student_ids:
+                # Занятия, которые переживут эту правку. Если расписание
+                # менялось, обычные будущие занятия уже удалены выше и
+                # здесь останутся только правленные вручную - им состав
+                # тоже надо поправить, иначе снятый ученик так и будет
+                # числиться на перенесённом занятии.
+                lesson_ids = await self.generation_repo.get_future_scheduled_lesson_ids(
+                    pattern_id=pattern_id,
+                    not_before=today,
+                )
+
+                if lesson_ids:
+                    if added_student_ids:
+                        await self.generation_repo.insert_lesson_students(
+                            [
+                                (lesson_id, student_id)
+                                for lesson_id in lesson_ids
+                                for student_id in added_student_ids
+                            ]
+                        )
+                    if removed_student_ids:
+                        await self.generation_repo.delete_lesson_students(
+                            lesson_ids=lesson_ids,
+                            student_ids=removed_student_ids,
+                        )
+
+                logger.info(
+                    "Pattern %s: student roster changed, +%s -%s on %s lessons",
+                    pattern_id,
+                    len(added_student_ids),
+                    len(removed_student_ids),
+                    len(lesson_ids),
+                )
         else:
             student_ids = await self.pattern_repo.get_student_ids(pattern_id)
+            added_student_ids = []
+            removed_student_ids = []
 
         pattern = await self.pattern_repo.update_obj(pattern)
 
-        if not schedule_changed:
-            return pattern, GenerationResult(
+        # Пересборка занятий. Делается до событий: сообщение ученику
+        # должно называть даты, которые уже существуют.
+        if schedule_changed:
+            result = await self.generator_service.generate_pattern(
+                pattern=pattern,
+                slots=slots,
+                student_ids=student_ids,
+            )
+            logger.info(
+                "Updated pattern %s, regenerated %s lessons",
+                pattern_id,
+                result.created_count,
+            )
+        else:
+            result = GenerationResult(
                 batch_id=None,
                 created_count=0,
                 blocked_count=0,
                 already_existed_count=0,
             )
 
-        result = await self.generator_service.generate_pattern(
-            pattern=pattern,
-            slots=slots,
-            student_ids=student_ids,
-        )
+        # ---- события для рассыльщиков ----
+        #
+        # Три разных факта и три разных адресата. В одном сохранении
+        # формы могут случиться все три сразу: расписание сдвинули,
+        # кого-то добавили, кого-то сняли.
+        #
+        #   добавленным   "вам назначены занятия"   - они не знают,
+        #                 каким расписание было раньше, и рассказывать
+        #                 им про изменение бессмысленно;
+        #   оставшимся    "расписание изменилось"   - только если оно
+        #                 действительно изменилось;
+        #   снятым        "занятия отменены"        - их занятия уже
+        #                 удалены, узнать об этом больше неоткуда.
+        #
+        # Правка одних лишь заметок не порождает ничего: слоты приходят
+        # с каждым сохранением формы, поэтому смотрим на их содержимое,
+        # а не на факт присутствия в запросе.
+        slot_items = self._slot_items(slots)
+        schedule_really_changed = self._slots_differ(previous_slot_items, slot_items)
 
-        logger.info(
-            "Updated pattern %s, regenerated %s lessons",
-            pattern_id,
-            result.created_count,
-        )
+        remaining_student_ids = [
+            item for item in student_ids if item not in added_student_ids
+        ]
+
+        upcoming_dates: List[date] = []
+        if added_student_ids or (schedule_really_changed and remaining_student_ids):
+            upcoming_dates = await self.generation_repo.get_future_scheduled_lesson_dates(
+                pattern_id=pattern_id,
+                not_before=today,
+            )
+
+        if added_student_ids:
+            await record_pattern_assigned(
+                self.db,
+                pattern_id=pattern_id,
+                studio_id=pattern.studio_id,
+                teacher_id=pattern.teacher_id,
+                student_ids=added_student_ids,
+                slots=slot_items,
+                upcoming_dates=upcoming_dates,
+                valid_until=pattern.valid_until,
+            )
+
+        if schedule_really_changed and remaining_student_ids:
+            await record_pattern_changed(
+                self.db,
+                pattern_id=pattern_id,
+                studio_id=pattern.studio_id,
+                teacher_id=pattern.teacher_id,
+                student_ids=remaining_student_ids,
+                slots=slot_items,
+                previous_slots=previous_slot_items,
+                upcoming_dates=upcoming_dates,
+                valid_until=pattern.valid_until,
+            )
+
+        if removed_student_ids:
+            await record_pattern_unassigned(
+                self.db,
+                pattern_id=pattern_id,
+                studio_id=pattern.studio_id,
+                teacher_id=pattern.teacher_id,
+                student_ids=removed_student_ids,
+                previous_slots=previous_slot_items,
+            )
 
         return pattern, result
 
@@ -340,19 +560,22 @@ class RecurringPatternService:
             Количество удалённых будущих занятий.
         """
         pattern = await self.get_pattern(pattern_id)
-        deleted = 0
+        deleted_lesson_ids: List[int] = []
 
         if delete_future_lessons:
-            deleted = await self.generation_repo.delete_future_lessons_for_slots(
+            deleted_lesson_ids = await self.generator_service.remove_future_lessons_for_slots(
                 slot_ids=[slot.id for slot in pattern.slots],
-                not_before=today_in_studio_tz(),
+                pattern_id=pattern_id,
+                reason=DELETION_REASON_PATTERN_DELETED,
             )
 
         await self.pattern_repo.delete_by_id(pattern_id)
         logger.info(
-            "Deleted pattern %s, removed %s future lessons", pattern_id, deleted
+            "Deleted pattern %s, removed %s future lessons",
+            pattern_id,
+            len(deleted_lesson_ids),
         )
-        return deleted
+        return len(deleted_lesson_ids)
 
     # ==================== ПРЕОБРАЗОВАНИЕ ДЛЯ ОТВЕТА ====================
 

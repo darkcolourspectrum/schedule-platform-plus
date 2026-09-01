@@ -45,6 +45,19 @@ MINUTES_PER_DAY = 24 * 60
 # занимало кабинет и конфликтовало с другими, не показываясь нигде.
 WORKING_DAYS = frozenset(settings.working_days_set)
 
+# Названия дней недели, ISO 1-7. Живут здесь, а не в схемах API, потому
+# что нужны в трёх местах сразу: валидация формы, ответ эндпоинта и текст
+# события для рассылки. Один словарь - гарантия, что ученик и админ видят
+# один и тот же день одним и тем же словом.
+DAY_NAMES = {
+    1: "понедельник",
+    2: "вторник",
+    3: "среда",
+    4: "четверг",
+    5: "пятница",
+    6: "суббота",
+    7: "воскресенье",
+}
 
 class RecurrenceError(ValueError):
     """Базовая ошибка расчёта повторений. Ловится сервисным слоем."""
@@ -337,6 +350,7 @@ def find_overlapping_slot_pairs(
 __all__ = [
     "SCHEDULE_TZ",
     "WORKING_DAYS",
+    "DAY_NAMES",
     "RecurrenceError",
     "LessonCrossesMidnightError",
     "InvalidDayOfWeekError",

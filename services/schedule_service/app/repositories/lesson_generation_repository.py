@@ -204,7 +204,7 @@ class LessonGenerationRepository:
         self,
         batch_id: UUID,
         not_before: date,
-    ) -> int:
+    ) -> List[int]:
         """
         Откатить один прогон генерации.
 
@@ -217,9 +217,16 @@ class LessonGenerationRepository:
         Прошлое, проведённые занятия и всё, что админ трогал руками,
         остаётся нетронутым. Именно это делает откат безопасным: он не
         может стереть ничего, кроме того, что сам же и создал.
+
+        Returns:
+            ID удалённых занятий, а не их количество. Удаление - такой же
+            факт, как создание, и рассказать о нём аналитической проекции
+            нужно поимённо: иначе она навсегда останется со строками
+            о занятиях, которых больше нет.
         """
         result = await self.db.execute(
-            delete(Lesson).where(
+            delete(Lesson)
+            .where(
                 and_(
                     Lesson.generation_batch_id == batch_id,
                     Lesson.lesson_date >= not_before,
@@ -227,32 +234,40 @@ class LessonGenerationRepository:
                     Lesson.status == "scheduled",
                 )
             )
+            .returning(Lesson.id)
+            .execution_options(synchronize_session=False)
         )
+        deleted_ids = list(result.scalars().all())
         await self.db.flush()
 
-        deleted = result.rowcount or 0
         logger.info(
-            "Rolled back generation batch %s: %s lessons deleted", batch_id, deleted
+            "Rolled back generation batch %s: %s lessons deleted",
+            batch_id,
+            len(deleted_ids),
         )
-        return deleted
+        return deleted_ids
 
     async def delete_future_lessons_for_slots(
         self,
         slot_ids: Sequence[int],
         not_before: date,
-    ) -> int:
+    ) -> List[int]:
         """
         Удалить будущие несостоявшиеся занятия указанных слотов.
 
-        Используется при удалении слота из шаблона и при смене расписания
-        шаблона. Условия те же, что у отката: прошлое и ручные правки
-        неприкосновенны.
+        Используется при удалении слота из шаблона, при смене расписания
+        шаблона и при удалении шаблона целиком. Условия те же, что
+        у отката: прошлое и ручные правки неприкосновенны.
+
+        Returns:
+            ID удалённых занятий.
         """
         if not slot_ids:
-            return 0
+            return []
 
         result = await self.db.execute(
-            delete(Lesson).where(
+            delete(Lesson)
+            .where(
                 and_(
                     Lesson.recurring_pattern_slot_id.in_(slot_ids),
                     Lesson.lesson_date >= not_before,
@@ -260,9 +275,13 @@ class LessonGenerationRepository:
                     Lesson.status == "scheduled",
                 )
             )
+            .returning(Lesson.id)
+            .execution_options(synchronize_session=False)
         )
+        deleted_ids = list(result.scalars().all())
         await self.db.flush()
-        return result.rowcount or 0
+
+        return deleted_ids
 
     async def count_lessons_for_pattern(
         self,
@@ -302,3 +321,89 @@ class LessonGenerationRepository:
 
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_future_scheduled_lesson_ids(
+        self,
+        pattern_id: int,
+        not_before: date,
+    ) -> List[int]:
+        """
+        ID будущих запланированных занятий шаблона.
+
+        Отличие от get_lesson_ids_for_pattern - фильтр по статусу, и оно
+        принципиальное. Тот метод отдаёт все занятия шаблона, чтобы
+        исключить их из проверки конфликтов. Здесь же нужны только те,
+        у которых состав участников ещё можно менять: проведённое,
+        отменённое или пропущенное занятие - это факт с зафиксированной
+        посещаемостью, и переписывать его список учеников значит
+        подделывать историю.
+        """
+        result = await self.db.execute(
+            select(Lesson.id).where(
+                and_(
+                    Lesson.recurring_pattern_id == pattern_id,
+                    Lesson.lesson_date >= not_before,
+                    Lesson.status == "scheduled",
+                )
+            )
+        )
+        return list(result.scalars().all())
+
+    async def get_future_scheduled_lesson_dates(
+        self,
+        pattern_id: int,
+        not_before: date,
+        limit: int = 5,
+    ) -> List[date]:
+        """
+        Ближайшие даты будущих занятий шаблона.
+
+        Нужны сообщению ученику: одного «занятия по вторникам» мало,
+        человеку нужен ориентир «первое - третьего сентября».
+
+        Даты берутся из БД, а не из результата генерации, намеренно.
+        При правке одного лишь состава учеников генерация не запускается
+        вовсе, но занятия у шаблона есть, и назвать их надо. Опираться
+        на то, что создал текущий прогон, значит промолчать ровно в том
+        случае, когда сообщение и нужно.
+        """
+        result = await self.db.execute(
+            select(Lesson.lesson_date)
+            .where(
+                and_(
+                    Lesson.recurring_pattern_id == pattern_id,
+                    Lesson.lesson_date >= not_before,
+                    Lesson.status == "scheduled",
+                )
+            )
+            .distinct()
+            .order_by(Lesson.lesson_date)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def delete_lesson_students(
+        self,
+        lesson_ids: Sequence[int],
+        student_ids: Sequence[int],
+    ) -> int:
+        """
+        Отвязать учеников от занятий.
+
+        Обратная операция к insert_lesson_students. Нужна, когда ученика
+        убрали из шаблона: его будущие занятия должны перестать быть
+        его занятиями.
+        """
+        if not lesson_ids or not student_ids:
+            return 0
+
+        result = await self.db.execute(
+            delete(LessonStudent).where(
+                and_(
+                    LessonStudent.lesson_id.in_(lesson_ids),
+                    LessonStudent.student_id.in_(student_ids),
+                )
+            )
+        )
+        await self.db.flush()
+        return result.rowcount or 0

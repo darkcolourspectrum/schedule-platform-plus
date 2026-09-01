@@ -38,6 +38,9 @@ _QUEUE_METHODS = {
     "lesson.created": "queue_lesson_created",
     "lesson.cancelled": "queue_lesson_cancelled",
     "lesson.rescheduled": "queue_lesson_rescheduled",
+    "pattern.assigned": "queue_pattern_assigned",
+    "pattern.changed": "queue_pattern_changed",
+    "pattern.unassigned": "queue_pattern_unassigned",
 }
 
 
@@ -109,3 +112,14 @@ async def handle_lesson_cancelled(event: Dict[str, Any]) -> None:
 
 async def handle_lesson_rescheduled(event: Dict[str, Any]) -> None:
     await _process(event, "lesson.rescheduled")
+
+async def handle_pattern_assigned(event: Dict[str, Any]) -> None:
+    await _process(event, "pattern.assigned")
+
+
+async def handle_pattern_changed(event: Dict[str, Any]) -> None:
+    await _process(event, "pattern.changed")
+
+
+async def handle_pattern_unassigned(event: Dict[str, Any]) -> None:
+    await _process(event, "pattern.unassigned")

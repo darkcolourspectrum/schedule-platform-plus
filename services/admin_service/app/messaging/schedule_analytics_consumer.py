@@ -35,6 +35,8 @@ from app.messaging.schedule_analytics_handlers import (
     handle_lesson_created,
     handle_lesson_cancelled,
     handle_lesson_rescheduled,
+    handle_generation_lessons_created,
+    handle_generation_lessons_deleted,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,8 @@ HANDLERS: Dict[str, Callable[[dict], Awaitable[None]]] = {
     "lesson.created": handle_lesson_created,
     "lesson.cancelled": handle_lesson_cancelled,
     "lesson.rescheduled": handle_lesson_rescheduled,
+    "generation.lessons_created": handle_generation_lessons_created,
+    "generation.lessons_deleted": handle_generation_lessons_deleted,
 }
 
 
@@ -98,6 +102,12 @@ class ScheduleEventConsumer:
         )
 
         await queue.bind(exchange, routing_key="lesson.*")
+
+        # Технический поток генерации. Отдельное первое слово - не стиль,
+        # а механизм: очереди рассыльщиков привязаны к 'lesson.*' и под
+        # 'generation.*' не попадают, поэтому пакетные события до них
+        # физически не доходят и фильтровать им нечего.
+        await queue.bind(exchange, routing_key="generation.*")
 
         await queue.consume(self._on_message)
         logger.info(
