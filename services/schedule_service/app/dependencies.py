@@ -13,6 +13,8 @@ from app.repositories.lesson_repository import LessonRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.conflict_repository import ConflictRepository
 from app.repositories.lesson_generation_repository import LessonGenerationRepository
+from app.repositories.classroom_cache_repository import ClassroomCacheRepository
+from app.repositories.studio_cache_repository import StudioCacheRepository
 from app.services.conflict_service import ConflictService
 from app.services.lesson_generator_service import LessonGeneratorService
 from app.services.recurring_pattern_service import RecurringPatternService
@@ -54,6 +56,18 @@ async def get_user_repository(
     """Get UserRepository (читает из локального users_cache)"""
     return UserRepository(db)
 
+async def get_classroom_cache_repository(
+    db: AsyncSession = Depends(get_db)
+) -> ClassroomCacheRepository:
+    """Get ClassroomCacheRepository (читает из локального classrooms_cache)"""
+    return ClassroomCacheRepository(db)
+
+
+async def get_studio_cache_repository(
+    db: AsyncSession = Depends(get_db)
+) -> StudioCacheRepository:
+    """Get StudioCacheRepository (читает из локального studios_cache)"""
+    return StudioCacheRepository(db)
 
 # ========== SERVICE DEPENDENCIES ==========
 
@@ -124,9 +138,24 @@ async def get_lesson_service(
 async def get_schedule_service(
     lesson_repo: LessonRepository = Depends(get_lesson_repository),
     user_repo: UserRepository = Depends(get_user_repository),
+    classroom_repo: ClassroomCacheRepository = Depends(
+        get_classroom_cache_repository
+    ),
+    studio_repo: StudioCacheRepository = Depends(get_studio_cache_repository),
 ) -> ScheduleService:
-    """Get ScheduleService"""
-    return ScheduleService(lesson_repo, user_repo)
+    """
+    Get ScheduleService.
+
+    Все четыре репозитория работают поверх одной сессии: FastAPI кеширует
+    результат get_db в пределах запроса, поэтому подключение открывается
+    один раз на всю цепочку.
+    """
+    return ScheduleService(
+        lesson_repo=lesson_repo,
+        user_repo=user_repo,
+        classroom_repo=classroom_repo,
+        studio_repo=studio_repo,
+    )
 
 
 # ========== AUTH DEPENDENCIES ==========

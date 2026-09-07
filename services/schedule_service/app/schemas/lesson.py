@@ -71,6 +71,7 @@ class LessonStudentInfo(BaseModel):
 
     student_id: int
     attendance_status: str
+    student_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -97,6 +98,9 @@ class LessonResponse(BaseModel):
     # Дополнительные поля
     students: List[LessonStudentInfo] = Field(default_factory=list)
     is_recurring: bool = Field(False, description="Создано из шаблона")
+    has_ended: bool = Field(
+        False, description="Время занятия уже истекло (в часов поясе студии)"
+    )
 
     model_config = {"from_attributes": True}
 
@@ -112,7 +116,6 @@ class LessonWithDetails(LessonResponse):
     """Расширенная информация о занятии"""
 
     teacher_name: Optional[str] = None
-    student_names: List[str] = Field(default_factory=list)
     classroom_name: Optional[str] = None
     studio_name: Optional[str] = None
 

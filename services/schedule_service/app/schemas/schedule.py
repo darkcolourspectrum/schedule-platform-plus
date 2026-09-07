@@ -36,6 +36,7 @@ class ScheduleLessonItem(BaseModel):
     student_names: List[str] = Field(default_factory=list)
     
     is_recurring: bool
+    has_ended: bool = False
     notes: Optional[str] = None
 
 

@@ -157,6 +157,22 @@ def generation_horizon_end(from_day: Optional[date] = None) -> date:
     base = from_day or today_in_studio_tz()
     return base + timedelta(weeks=settings.schedule_generation_weeks)
 
+def lesson_has_ended(lesson_date: date, end_time: time) -> bool:
+    """
+    Закончилось ли занятие к текущему моменту.
+
+    "Прошедшее" - вычисляемое свойство, а не поле в базе. Хранить его
+    значило бы завести воркер, проставляющий флаг, и получить второй
+    источник правды, который отстаёт ровно тогда, когда воркер упал.
+
+    Граница - время окончания, а не начала: у идущего занятия результата
+    ещё нет, отмечать его рано.
+
+    Сравнение в часовом поясе студии по той же причине, что и в
+    today_in_studio_tz(): процесс в контейнере живёт по UTC.
+    """
+    lesson_end = SCHEDULE_TZ.localize(datetime.combine(lesson_date, end_time))
+    return datetime.now(SCHEDULE_TZ) >= lesson_end
 
 # ==================== АРИФМЕТИКА ВРЕМЕНИ ====================
 
@@ -359,6 +375,7 @@ __all__ = [
     "is_working_day",
     "assert_working_day_of_week",
     "today_in_studio_tz",
+    "lesson_has_ended",
     "generation_horizon_end",
     "calculate_end_time",
     "duration_minutes_between",

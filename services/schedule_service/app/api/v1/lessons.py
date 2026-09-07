@@ -25,6 +25,7 @@ from app.dependencies import (
     get_current_teacher,
     get_current_user,
     get_lesson_service,
+    get_schedule_service,
 )
 from app.models.lesson import Lesson
 from app.schemas.common import SuccessResponse
@@ -35,8 +36,12 @@ from app.schemas.lesson import (
     LessonResponse,
     LessonStudentInfo,
     LessonUpdate,
+    LessonWithDetails,
 )
 from app.services.lesson_service import LessonService
+from app.services.schedule_service import ScheduleService
+from app.domain.recurrence import lesson_has_ended
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,23 +55,71 @@ async def _build_response(
     """
     Собрать ответ с настоящей посещаемостью.
 
+    Поля перечислены явно, а не через model_validate. Валидация прямо
+    с ORM-объекта из-за from_attributes пытается прочитать связь
+    lesson.students, а это ленивая загрузка: синхронный поход в базу
+    посреди асинхронного кода, на котором SQLAlchemy падает
+    с MissingGreenlet. Ученики приходят отдельным запросом ниже.
+
     Один общий сборщик на все эндпоинты: раньше каждый собирал ответ
     сам и подставлял статус посещения из головы, поэтому они расходились
     между собой и с базой.
     """
     students = await lesson_service.get_lesson_students(lesson.id)
 
-    response = LessonResponse.model_validate(lesson)
-    response.students = [
-        LessonStudentInfo(
-            student_id=item.student_id,
-            attendance_status=item.attendance_status,
-        )
-        for item in students
-    ]
-    response.is_recurring = lesson.recurring_pattern_id is not None
-    return response
+    return LessonResponse(
+        id=lesson.id,
+        studio_id=lesson.studio_id,
+        teacher_id=lesson.teacher_id,
+        classroom_id=lesson.classroom_id,
+        recurring_pattern_id=lesson.recurring_pattern_id,
+        lesson_date=lesson.lesson_date,
+        start_time=lesson.start_time,
+        end_time=lesson.end_time,
+        status=lesson.status,
+        notes=lesson.notes,
+        cancellation_reason=lesson.cancellation_reason,
+        created_at=lesson.created_at,
+        updated_at=lesson.updated_at,
+        students=[
+            LessonStudentInfo(
+                student_id=item.student_id,
+                attendance_status=item.attendance_status,
+            )
+            for item in students
+        ],
+        is_recurring=lesson.recurring_pattern_id is not None,
+        has_ended=lesson_has_ended(lesson.lesson_date, lesson.end_time),
+    )
 
+async def _build_details_response(
+    lesson: Lesson,
+    lesson_service: LessonService,
+    schedule_service: ScheduleService,
+) -> LessonWithDetails:
+    """
+    Ответ для карточки занятия: посещаемость плюс имена.
+
+
+    Раньше ни один источник не был самодостаточен. Список расписания
+    отдавал имена без посещаемости, а GET занятия - посещаемость без
+    единого имени, только id. Карточку приходилось бы сшивать на фронте
+    из двух ответов, и работала бы она только там, откуда открыта.
+    """
+    base = await _build_response(lesson, lesson_service)
+    names = await schedule_service.get_lesson_names(lesson)
+
+    response = LessonWithDetails(
+        **base.model_dump(),
+        teacher_name=names["teacher_name"],
+        classroom_name=names["classroom_name"],
+        studio_name=names["studio_name"],
+    )
+
+    for item in response.students:
+        item.student_name = names["student_names"].get(item.student_id)
+
+    return response
 
 def _assert_lesson_access(current_user: dict, teacher_id: int) -> None:
     if not check_teacher_access(current_user, teacher_id):
@@ -118,14 +171,22 @@ async def create_lesson(
 
 @router.get(
     "/{lesson_id}",
-    response_model=LessonResponse,
+    response_model=LessonWithDetails,
     summary="Занятие по ID",
 )
 async def get_lesson(
     lesson_id: int,
     current_user: dict = Depends(get_current_user),
     lesson_service: LessonService = Depends(get_lesson_service),
+    schedule_service: ScheduleService = Depends(get_schedule_service),
 ):
+    """
+    Занятие со всем, что нужно карточке: посещаемость и имена.
+
+    Единственный эндпоинт, отдающий имена. Остальные возвращают
+    LessonResponse: там ответ нужен для обновления состояния после
+    действия, а не для показа человеку.
+    """
     lesson = await lesson_service.get_lesson(lesson_id)
 
     role = extract_role_name(current_user.get("role"))
@@ -141,7 +202,9 @@ async def get_lesson(
     else:
         _assert_lesson_access(current_user, lesson.teacher_id)
 
-    return await _build_response(lesson, lesson_service)
+    return await _build_details_response(
+        lesson, lesson_service, schedule_service
+    )
 
 
 # ==================== ИЗМЕНЕНИЕ ====================
@@ -260,6 +323,27 @@ async def mark_lesson_missed(
     missed = await lesson_service.mark_as_missed(lesson_id)
     return await _build_response(missed, lesson_service)
 
+@router.post(
+    "/{lesson_id}/mark-teacher-missed",
+    response_model=LessonResponse,
+    summary="Занятие не состоялось по вине преподавателя",
+)
+async def mark_lesson_teacher_missed(
+    lesson_id: int,
+    current_user: dict = Depends(get_current_teacher),
+    lesson_service: LessonService = Depends(get_lesson_service),
+):
+    """
+    Отметить, что занятие сорвалось по вине преподавателя.
+
+    Ученикам при этом проставляется 'cancelled', а не пропуск:
+    они не виноваты, что занятия не было.
+    """
+    lesson = await lesson_service.get_lesson(lesson_id)
+    _assert_lesson_access(current_user, lesson.teacher_id)
+
+    lesson = await lesson_service.mark_as_teacher_missed(lesson_id)
+    return await _build_response(lesson, lesson_service)
 
 # ==================== УДАЛЕНИЕ ====================
 

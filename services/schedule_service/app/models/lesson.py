@@ -36,7 +36,8 @@ class Lesson(Base, TimestampMixin):
         ),
         CheckConstraint("end_time > start_time", name="ck_lesson_time_order"),
         CheckConstraint(
-            "status IN ('scheduled', 'completed', 'cancelled', 'missed')",
+            "status IN ('scheduled', 'completed', 'cancelled', 'missed', "
+            "'teacher_missed')",
             name="ck_lesson_status",
         ),
         Index('idx_studio_date', 'studio_id', 'lesson_date'),
@@ -78,7 +79,7 @@ class Lesson(Base, TimestampMixin):
         String(20),
         default="scheduled",
         nullable=False,
-        comment="scheduled, completed, cancelled, missed"
+        comment="scheduled, completed, cancelled, missed, teacher_missed"
     )
 
     is_manually_modified: Mapped[bool] = mapped_column(

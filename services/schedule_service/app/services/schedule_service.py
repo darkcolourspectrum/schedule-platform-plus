@@ -10,6 +10,9 @@ from app.models.lesson import Lesson
 from app.repositories.lesson_repository import LessonRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.schedule import ScheduleLessonItem
+from app.repositories.classroom_cache_repository import ClassroomCacheRepository
+from app.repositories.studio_cache_repository import StudioCacheRepository
+from app.domain.recurrence import lesson_has_ended
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +24,20 @@ class ScheduleService:
         self,
         lesson_repo: LessonRepository,
         user_repo: UserRepository,
+        classroom_repo: ClassroomCacheRepository,
+        studio_repo: StudioCacheRepository,
     ):
         self.lesson_repo = lesson_repo
         self.user_repo = user_repo
+        self.classroom_repo = classroom_repo
+        self.studio_repo = studio_repo
+
+        # Памятки на время одного запроса. Сервис создаётся заново на
+        # каждый HTTP-запрос, поэтому кеш не может протухнуть. В неделе
+        # расписания одни и те же преподаватели и кабинеты повторяются
+        # десятки раз - без памятки это десятки одинаковых SELECT.
+        self._teacher_names: Dict[int, str] = {}
+        self._classroom_names: Dict[int, str] = {}
     
     async def get_studio_schedule(
         self,
@@ -79,6 +93,31 @@ class ScheduleService:
             schedule_items.append(item)
         
         return schedule_items
+
+    async def _teacher_name(self, teacher_id: int) -> str:
+        if teacher_id not in self._teacher_names:
+            teacher = await self.user_repo.get_by_id(teacher_id)
+            self._teacher_names[teacher_id] = (
+                self.user_repo.get_full_name(teacher) if teacher else "Unknown"
+            )
+        return self._teacher_names[teacher_id]
+
+    async def _classroom_name(self, classroom_id: Optional[int]) -> Optional[str]:
+        """
+        Настоящее название кабинета из локального кеша.
+
+        Раньше здесь стояла заглушка f"Кабинет {id}", и пользователь
+        видел номер вместо "Малый зал", хотя кеш кабинетов в сервисе
+        уже был и использовался в других местах.
+        """
+        if classroom_id is None:
+            return None
+        if classroom_id not in self._classroom_names:
+            classroom = await self.classroom_repo.get_by_id(classroom_id)
+            self._classroom_names[classroom_id] = (
+                classroom.name if classroom else f"Кабинет {classroom_id}"
+            )
+        return self._classroom_names[classroom_id]
     
     async def _lesson_to_schedule_item(self, lesson: Lesson) -> ScheduleLessonItem:
         """
@@ -86,15 +125,14 @@ class ScheduleService:
         """
         # Получаем информацию о преподавателе
         teacher = await self.user_repo.get_by_id(lesson.teacher_id)
-        teacher_name = self.user_repo.get_full_name(teacher) if teacher else "Unknown"
+        teacher_name = await self._teacher_name(lesson.teacher_id)
         
         # Получаем учеников
         student_ids = await self.lesson_repo.get_student_ids(lesson.id)
         students = await self.user_repo.get_by_ids(student_ids) if student_ids else []
         student_names = [self.user_repo.get_full_name(s) for s in students]
         
-        # TODO: Получить информацию о кабинете из Admin Service
-        classroom_name = f"Кабинет {lesson.classroom_id}" if lesson.classroom_id else None
+        classroom_name = await self._classroom_name(lesson.classroom_id)
         
         return ScheduleLessonItem(
             lesson_id=lesson.id,
@@ -109,6 +147,7 @@ class ScheduleService:
             student_ids=student_ids,
             student_names=student_names,
             is_recurring=lesson.recurring_pattern_id is not None,
+            has_ended=lesson_has_ended(lesson.lesson_date, lesson.end_time),
             notes=lesson.notes
         )
     
@@ -177,3 +216,25 @@ class ScheduleService:
             enriched_lessons.append(lesson_data)
         
         return enriched_lessons
+
+    async def get_lesson_names(self, lesson: Lesson) -> Dict[str, Any]:
+        """
+        Имена для карточки одного занятия.
+
+        Живёт здесь, а не в LessonService: обогащение именами из локальных
+        кешей - забота сервиса расписания, LessonService про кеши
+        пользователей и кабинетов не знает и знать не должен.
+        """
+        student_ids = await self.lesson_repo.get_student_ids(lesson.id)
+        students = await self.user_repo.get_by_ids(student_ids) if student_ids else []
+        studio = await self.studio_repo.get_by_id(lesson.studio_id)
+
+        return {
+            "teacher_name": await self._teacher_name(lesson.teacher_id),
+            "classroom_name": await self._classroom_name(lesson.classroom_id),
+            "studio_name": studio.name if studio else None,
+            "student_names": {
+                student.id: self.user_repo.get_full_name(student)
+                for student in students
+            },
+        }

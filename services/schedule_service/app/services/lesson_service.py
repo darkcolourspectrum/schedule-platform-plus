@@ -39,12 +39,15 @@ from app.core.exceptions import (
     InvalidLessonStatusException,
     LessonImmutableException,
     LessonNotFoundException,
+    LessonNotEndedException,
+    InvalidAttendanceException,
 )
 from app.domain.conflicts import ConflictKind, LessonCandidate
 from app.domain.recurrence import (
     calculate_end_time,
     duration_minutes_between,
     today_in_studio_tz,
+    lesson_has_ended,
 )
 from app.messaging import (
     record_lesson_cancelled,
@@ -70,19 +73,34 @@ logger = logging.getLogger(__name__)
 # Проведённое и пропущенное слот не освобождают, поэтому их возврат
 # в scheduled ничего не бронирует заново.
 ALLOWED_STATUS_TRANSITIONS: Dict[str, List[str]] = {
-    "scheduled": ["completed", "cancelled", "missed"],
-    "completed": ["scheduled", "missed"],
-    "missed": ["scheduled", "completed"],
+    "scheduled": ["completed", "cancelled", "missed", "teacher_missed"],
+    "completed": ["scheduled", "missed", "teacher_missed"],
+    "missed": ["scheduled", "completed", "teacher_missed"],
+    "teacher_missed": ["scheduled", "completed", "missed"],
     "cancelled": ["scheduled"],
 }
 
 # Статус занятия -> статус посещения учеников по умолчанию.
+#
+# Единственный источник правды для этого соответствия.
+#
+# Отсюда же следует главное свойство модели: посещаемость выводится из
+# статуса занятия автоматически. Поимённая отметка - механизм исключения
+# для групповых занятий, а не обязательный шаг.
+
 ATTENDANCE_BY_STATUS = {
     "scheduled": "scheduled",
     "completed": "attended",
     "cancelled": "cancelled",
     "missed": "missed",
+    "teacher_missed": "cancelled",
 }
+
+# Статусы, после которых занятие становится историей: его нельзя ни
+# перенести, ни удалить. Список один на весь сервис - иначе он
+# расходится по местам употребления при добавлении нового статуса.
+FINAL_STATUSES = ("completed", "missed", "teacher_missed")
+
 
 CONFLICT_EXCEPTIONS = {
     ConflictKind.CLASSROOM: "Кабинет занят другим занятием в это время",
@@ -205,7 +223,7 @@ class LessonService:
         """
         lesson = await self.get_lesson(lesson_id)
 
-        if lesson.status in ("completed", "missed"):
+        if lesson.status in FINAL_STATUSES:
             raise LessonImmutableException(
                 "Нельзя изменить расписание проведённого или пропущенного "
                 "занятия. Сначала верните его в статус запланированного"
@@ -240,6 +258,7 @@ class LessonService:
         )
 
         if schedule_changed:
+            self._assert_not_ended(lesson, "перенести")
             student_ids = await self.lesson_repo.get_student_ids(lesson_id)
             await self._assert_no_conflicts(
                 LessonCandidate(
@@ -311,6 +330,8 @@ class LessonService:
         if lesson.status == "cancelled":
             return lesson
 
+        self._assert_not_ended(lesson, "отменить")
+
         self._assert_transition_allowed(lesson.status, "cancelled")
 
         lesson.status = "cancelled"
@@ -318,7 +339,7 @@ class LessonService:
             lesson.cancellation_reason = reason
 
         lesson = await self.lesson_repo.update_obj(lesson)
-        await self.lesson_repo.set_attendance_for_all(lesson_id, "cancelled")
+        await self.lesson_repo.set_attendance_for_all(lesson_id, ATTENDANCE_BY_STATUS["cancelled"])
 
         student_ids = await self.lesson_repo.get_student_ids(lesson_id)
         await record_lesson_cancelled(
@@ -369,7 +390,7 @@ class LessonService:
         lesson.cancellation_reason = None
 
         lesson = await self.lesson_repo.update_obj(lesson)
-        await self.lesson_repo.set_attendance_for_all(lesson_id, "scheduled")
+        await self.lesson_repo.set_attendance_for_all(lesson_id, ATTENDANCE_BY_STATUS["scheduled"])
 
         logger.info("Restored lesson %s to scheduled", lesson_id)
         return lesson
@@ -384,22 +405,38 @@ class LessonService:
 
         Args:
             attendance: посещаемость по ученикам, {student_id: статус}.
-                Не указана - все считаются присутствовавшими.
+                Не указана - все считаются присутствовавшими. указанная посещаемость 
+                трактуется как список исключений, а не как полный список.
 
         Раздельная посещаемость нужна, потому что "занятие не состоялось"
         и "один ученик не пришёл" - разные события. Для группового занятия
         второе не должно отменять первое.
         """
+        
         lesson = await self.get_lesson(lesson_id)
-        self._assert_transition_allowed(lesson.status, "completed")
+        self._assert_ended(lesson)
 
-        lesson.status = "completed"
-        lesson = await self.lesson_repo.update_obj(lesson)
+        student_ids = await self.lesson_repo.get_student_ids(lesson_id)
+        self._validate_attendance(attendance, student_ids)
 
+        # Занятие уже проведено - значит это правка посещаемости, а не
+        # смена статуса. Прогонять её через таблицу переходов нельзя:
+        # completed -> completed там нет и быть не должно, но исправить
+        # ошибочную отметку человек обязан иметь возможность.
+        if lesson.status != "completed":
+            self._assert_transition_allowed(lesson.status, "completed")
+            lesson.status = "completed"
+            lesson = await self.lesson_repo.update_obj(lesson)
+
+        # Сначала значение по умолчанию всем, потом поимённые исключения.
+        # Порядок важен: без первого шага ученик, которого преподаватель
+        # не упомянул, остался бы в 'scheduled' на проведённом занятии -
+        # неотличимо от занятия, до которого вообще не дошли руки.
+        await self.lesson_repo.set_attendance_for_all(
+            lesson_id, ATTENDANCE_BY_STATUS["completed"]
+        )
         if attendance:
             await self.lesson_repo.set_attendance_bulk(lesson_id, attendance)
-        else:
-            await self.lesson_repo.set_attendance_for_all(lesson_id, "attended")
 
         logger.info("Completed lesson %s", lesson_id)
         return lesson
@@ -407,13 +444,39 @@ class LessonService:
     async def mark_as_missed(self, lesson_id: int) -> Lesson:
         """Отметить занятие как несостоявшееся по вине ученика."""
         lesson = await self.get_lesson(lesson_id)
+        self._assert_ended(lesson)
         self._assert_transition_allowed(lesson.status, "missed")
 
         lesson.status = "missed"
         lesson = await self.lesson_repo.update_obj(lesson)
-        await self.lesson_repo.set_attendance_for_all(lesson_id, "missed")
+        await self.lesson_repo.set_attendance_for_all(lesson_id, ATTENDANCE_BY_STATUS["missed"])
 
         logger.info("Marked lesson %s as missed", lesson_id)
+        return lesson
+
+    async def mark_as_teacher_missed(self, lesson_id: int) -> Lesson:
+        """
+        Отметить, что занятие не состоялось по вине преподавателя.
+
+        Отдельный статус, а не причина строкой: последствия принципиально
+        разные. После прогула преподавателя отработка положена
+        безусловно, после прогула ученика - на усмотрение студии.
+        Различить это разбором текстовой причины потом невозможно.
+
+        От отмены отличается моментом: отмена - решение, принятое
+        заранее, освобождающее слот. Здесь занятие уже прошло.
+        """
+        lesson = await self.get_lesson(lesson_id)
+        self._assert_ended(lesson)
+        self._assert_transition_allowed(lesson.status, "teacher_missed")
+
+        lesson.status = "teacher_missed"
+        lesson = await self.lesson_repo.update_obj(lesson)
+        await self.lesson_repo.set_attendance_for_all(
+            lesson_id, ATTENDANCE_BY_STATUS["teacher_missed"]
+        )
+
+        logger.info("Marked lesson %s as teacher_missed", lesson_id)
         return lesson
 
     # ==================== УДАЛЕНИЕ ====================
@@ -429,7 +492,7 @@ class LessonService:
         """
         lesson = await self.get_lesson(lesson_id)
 
-        if lesson.status in ("completed", "missed"):
+        if lesson.status in FINAL_STATUSES:
             raise LessonImmutableException(
                 "Проведённое или пропущенное занятие нельзя удалить - "
                 "это часть истории посещений"
@@ -438,7 +501,7 @@ class LessonService:
         if lesson.lesson_date < today_in_studio_tz():
             raise LessonImmutableException(
                 "Прошедшее занятие нельзя удалить. Если оно не состоялось, "
-                "отметьте его отменённым"
+                "отметьте, что оно не состоялось"
             )
 
         result = await self.lesson_repo.delete_by_id(lesson_id)
@@ -452,6 +515,65 @@ class LessonService:
         """Проверить допустимость перехода статуса."""
         if new not in ALLOWED_STATUS_TRANSITIONS.get(current, []):
             raise InvalidLessonStatusException(current, new)
+
+    def _assert_ended(self, lesson: Lesson) -> None:
+        """
+        Результат ставится только у закончившегося занятия.
+
+        До окончания результата не существует: занятие либо ещё впереди,
+        либо идёт прямо сейчас и неизвестно, чем кончится.
+        """
+        if not lesson_has_ended(lesson.lesson_date, lesson.end_time):
+            raise LessonNotEndedException(
+                "Занятие ещё не закончилось. Отметить результат можно "
+                "после времени его окончания"
+            )
+
+    def _assert_not_ended(self, lesson: Lesson, action: str) -> None:
+        """
+        Планировать можно только то, что ещё не произошло.
+
+        Без этой проверки вчерашнее занятие можно было перенести на
+        завтра, и следа о том, что оно уже было, не оставалось.
+        """
+        if lesson_has_ended(lesson.lesson_date, lesson.end_time):
+            raise LessonImmutableException(
+                f"Занятие уже прошло, {action} его нельзя. "
+                f"Отметьте, состоялось оно или нет"
+            )
+
+    def _validate_attendance(
+        self,
+        attendance: Optional[Dict[int, str]],
+        student_ids: List[int],
+    ) -> None:
+        """
+        Проверить поимённую посещаемость до записи.
+
+        Две вещи, которые иначе прошли бы молча. Чужой ученик в словаре
+        не обновил бы ни одной строки, и преподаватель считал бы, что
+        отметил его. А занятие, на которое не пришёл никто, - это не
+        проведённое занятие, а несостоявшееся, и статус у него другой.
+        """
+        if not attendance:
+            return
+
+        unknown = set(attendance) - set(student_ids)
+        if unknown:
+            raise InvalidAttendanceException(
+                f"Эти ученики не записаны на занятие: {sorted(unknown)}"
+            )
+
+        default = ATTENDANCE_BY_STATUS["completed"]
+        someone_came = any(
+            attendance.get(student_id, default) == "attended"
+            for student_id in student_ids
+        )
+        if student_ids and not someone_came:
+            raise InvalidAttendanceException(
+                "Не пришёл никто из учеников - такое занятие не является "
+                "проведённым. Отметьте, что оно не состоялось"
+            )
 
     async def _assert_no_conflicts(
         self,

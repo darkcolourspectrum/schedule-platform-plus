@@ -151,3 +151,21 @@ class LessonImmutableException(ScheduleServiceException):
             message=reason,
             details="История занятий защищена от изменений",
         )
+
+class LessonNotEndedException(ScheduleServiceException):
+    """Занятие ещё не закончилось - результат ставить рано."""
+
+    def __init__(self, reason: str):
+        super().__init__(
+            message=reason,
+            details="Результат можно отметить только после окончания занятия",
+        )
+
+class InvalidAttendanceException(ScheduleServiceException):
+    """Поимённая посещаемость не согласуется с занятием."""
+
+    def __init__(self, reason: str):
+        super().__init__(
+            message=reason,
+            details="Проверьте состав учеников и отметки посещения",
+        )

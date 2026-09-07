@@ -17,6 +17,8 @@ from app.core.exceptions import (
     UserNotFoundException,
     GenerationException,
     LessonImmutableException,
+    LessonNotEndedException,
+    InvalidAttendanceException,
 )
 
 __all__ = [
@@ -37,4 +39,6 @@ __all__ = [
     "UserNotFoundException",
     "GenerationException",
     "LessonImmutableException",
+    "LessonNotEndedException",
+    "InvalidAttendanceException"
 ]
