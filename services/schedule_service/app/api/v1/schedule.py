@@ -4,6 +4,7 @@ API endpoints для Schedule (расписание)
 
 import logging
 from datetime import date
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from app.schemas.schedule import (
@@ -13,7 +14,8 @@ from app.schemas.schedule import (
     GenerateLessonsRequest,
     GenerateLessonsResponse,
     ConflictCheckRequest,
-    ConflictCheckResponse
+    ConflictCheckResponse,
+    UnmarkedLessonsResponse,
 )
 from app.services.recurring_pattern_service import RecurringPatternService
 from app.services.schedule_service import ScheduleService
@@ -27,11 +29,12 @@ from app.dependencies import (
     get_schedule_service,
     get_generator_service,
     get_lesson_service,
+    get_current_teacher,
     check_studio_access,
     check_teacher_access,
     check_student_access,
     get_pattern_service,
-     get_conflict_service,
+    get_conflict_service,
 )
 from app.core.security import extract_role_name
 
@@ -159,6 +162,39 @@ async def get_student_schedule(
         total=len(lessons)
     )
 
+@router.get(
+    "/unmarked",
+    response_model=UnmarkedLessonsResponse,
+    summary="Занятия, ожидающие отметки",
+)
+async def get_unmarked_lessons(
+    studio_id: Optional[int] = Query(None),
+    teacher_id: Optional[int] = Query(None),
+    from_date: Optional[date] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    current_user: dict = Depends(get_current_teacher),
+    schedule_service: ScheduleService = Depends(get_schedule_service),
+):
+    """
+    Занятия, у которых время вышло, а результат не проставлен.
+
+    Преподаватель видит только свои: подставляем его id независимо
+    от того, что пришло в параметрах.
+    """
+    role = extract_role_name(current_user.get("role"))
+
+    if role != "admin":
+        teacher_id = current_user.get("user_id")
+    elif studio_id is not None:
+        await check_studio_access(current_user, studio_id)
+
+    total, lessons = await schedule_service.get_unmarked(
+        studio_id=studio_id,
+        teacher_id=teacher_id,
+        from_date=from_date,
+        limit=limit,
+    )
+    return UnmarkedLessonsResponse(total=total, lessons=lessons)
 
 @router.post(
     "/generate",

@@ -145,6 +145,16 @@ def today_in_studio_tz() -> date:
     """
     return datetime.now(SCHEDULE_TZ).date()
 
+def now_in_studio_tz() -> datetime:
+    """
+    Текущий момент в часовом поясе студии.
+
+    Нужен там, где сравнение идёт не только по дате, но и по времени:
+    процесс в контейнере живёт по UTC, и наивный datetime.now() сместил
+    бы границу на несколько часов.
+    """
+    return datetime.now(SCHEDULE_TZ)
+
 
 def generation_horizon_end(from_day: Optional[date] = None) -> date:
     """
@@ -375,6 +385,7 @@ __all__ = [
     "is_working_day",
     "assert_working_day_of_week",
     "today_in_studio_tz",
+    "now_in_studio_tz",
     "lesson_has_ended",
     "generation_horizon_end",
     "calculate_end_time",

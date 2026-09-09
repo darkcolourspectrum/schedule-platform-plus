@@ -454,7 +454,10 @@ class LessonService:
 
         lesson.status = LessonStatus.MISSED
         lesson = await self.lesson_repo.update_obj(lesson)
-        await self.lesson_repo.set_attendance_for_all(lesson_id, ATTENDANCE_BY_STATUS[LessonStatus.TEACHER_MISSED])
+        
+        await self.lesson_repo.set_attendance_for_all(
+            lesson_id, ATTENDANCE_BY_STATUS[LessonStatus.MISSED]
+        )
 
         logger.info("Marked lesson %s as missed", lesson_id)
         return lesson

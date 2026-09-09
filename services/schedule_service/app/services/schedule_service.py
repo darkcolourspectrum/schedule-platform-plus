@@ -3,7 +3,7 @@
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import date
 
 from app.models.lesson import Lesson
@@ -12,7 +12,7 @@ from app.repositories.user_repository import UserRepository
 from app.schemas.schedule import ScheduleLessonItem
 from app.repositories.classroom_cache_repository import ClassroomCacheRepository
 from app.repositories.studio_cache_repository import StudioCacheRepository
-from app.domain.recurrence import lesson_has_ended
+from app.domain.recurrence import lesson_has_ended, now_in_studio_tz
 
 logger = logging.getLogger(__name__)
 
@@ -238,3 +238,32 @@ class ScheduleService:
                 for student in students
             },
         }
+
+    async def get_unmarked(
+        self,
+        studio_id: Optional[int] = None,
+        teacher_id: Optional[int] = None,
+        from_date: Optional[date] = None,
+        limit: int = 50,
+    ) -> Tuple[int, List[ScheduleLessonItem]]:
+        """
+        Хвост неотмеченных: число и свежие строки.
+
+        Считается живым запросом, а не из проекции в аналитике.
+        Проекция обновляется событиями, а тут обновлять её нечему:
+        занятие переходит в ожидание отметки само, по ходу часов,
+        и никакого события при этом не происходит.
+        """
+        now = now_in_studio_tz()
+        now_date = now.date()
+        now_time = now.time()
+
+        total = await self.lesson_repo.count_unmarked(
+            now_date, now_time, studio_id, teacher_id, from_date
+        )
+        lessons = await self.lesson_repo.get_unmarked(
+            now_date, now_time, studio_id, teacher_id, from_date, limit
+        )
+
+        items = [await self._lesson_to_schedule_item(l) for l in lessons]
+        return total, items

@@ -122,3 +122,15 @@ class ConflictCheckResponse(BaseModel):
     
     has_conflict: bool
     conflicting_lessons: List[Dict[str, Any]] = Field(default_factory=list)
+
+class UnmarkedLessonsResponse(BaseModel):
+    """
+    Занятия, ждущие отметки.
+
+    total считается по всему хвосту, lessons - ограниченная выборка
+    свежих. Виджету на дашборде нужно только число, списку разбора -
+    строки, эндпоинт один на оба случая.
+    """
+
+    total: int
+    lessons: List[ScheduleLessonItem]

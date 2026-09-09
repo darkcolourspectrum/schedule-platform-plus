@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.models.lesson import Lesson
 from app.models.lesson_student import LessonStudent
 from app.repositories.base_repository import BaseRepository
+from app.domain.statuses import LessonStatus
 
 logger = logging.getLogger(__name__)
 
@@ -231,3 +232,86 @@ class LessonRepository(BaseRepository[Lesson]):
             updated += result.rowcount or 0
         await self.db.flush()
         return updated
+
+        # ==================== НЕОТМЕЧЕННЫЕ ====================
+
+    def _unmarked_conditions(
+        self,
+        now_date: date,
+        now_time: time,
+        studio_id: Optional[int],
+        teacher_id: Optional[int],
+        from_date: Optional[date],
+    ) -> List:
+        """
+        Условия выборки занятий, ожидающих отметки.
+
+        Занятие ждёт отметки, если оно запланировано, а время окончания
+        уже прошло. Никакого поля под это нет и не нужно: состояние
+        наступает само, по часам, и вычисляется в момент запроса.
+
+        Сравнение раздельное по дате и времени, а не по составному
+        значению: так работает индекс по (studio_id, lesson_date).
+        """
+        conditions = [
+            Lesson.status == LessonStatus.SCHEDULED,
+            or_(
+                Lesson.lesson_date < now_date,
+                and_(
+                    Lesson.lesson_date == now_date,
+                    Lesson.end_time <= now_time,
+                ),
+            ),
+        ]
+
+        if studio_id is not None:
+            conditions.append(Lesson.studio_id == studio_id)
+        if teacher_id is not None:
+            conditions.append(Lesson.teacher_id == teacher_id)
+        if from_date is not None:
+            conditions.append(Lesson.lesson_date >= from_date)
+
+        return conditions
+
+    async def count_unmarked(
+        self,
+        now_date: date,
+        now_time: time,
+        studio_id: Optional[int] = None,
+        teacher_id: Optional[int] = None,
+        from_date: Optional[date] = None,
+    ) -> int:
+        """Сколько занятий ждёт отметки. Без ограничения по количеству."""
+        conditions = self._unmarked_conditions(
+            now_date, now_time, studio_id, teacher_id, from_date
+        )
+        result = await self.db.execute(
+            select(func.count()).select_from(Lesson).where(*conditions)
+        )
+        return result.scalar_one()
+
+    async def get_unmarked(
+        self,
+        now_date: date,
+        now_time: time,
+        studio_id: Optional[int] = None,
+        teacher_id: Optional[int] = None,
+        from_date: Optional[date] = None,
+        limit: int = 50,
+    ) -> List[Lesson]:
+        """
+        Занятия, ждущие отметки. Свежие сверху.
+
+        Число считается по всему хвосту, а список ограничен: разбирать
+        его человек будет с недавних, а не с прошлогодних.
+        """
+        conditions = self._unmarked_conditions(
+            now_date, now_time, studio_id, teacher_id, from_date
+        )
+        result = await self.db.execute(
+            select(Lesson)
+            .where(*conditions)
+            .order_by(Lesson.lesson_date.desc(), Lesson.start_time.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
